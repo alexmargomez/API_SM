@@ -1,0 +1,63 @@
+{% extends 'dashboard/base.html' %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
+    <h2 class="mb-0 fs-3"><i class="fas fa-hospital text-primary me-2"></i> Gestión de Entidades</h2>
+    <div class="d-flex gap-2 d-none d-md-flex">
+        <a href="{% url 'export_csv' 'entidades' %}" class="btn btn-export w-100 w-md-auto"><i class="fas fa-file-csv me-2"></i>Exportar CSV</a>
+    </div>
+</div>
+
+<div class="mb-4">
+    <form method="get" class="d-flex flex-column flex-md-row gap-3">
+        <div class="input-group input-group-lg flex-grow-1 position-relative shadow-sm rounded-pill bg-white" style="border: 1px solid rgba(0,0,0,0.05); transition: all 0.3s ease;">
+            <span class="input-group-text bg-transparent border-0 text-primary px-4" style="z-index: 10;">
+                <i class="fas fa-search"></i>
+            </span>
+            <input type="text" name="q" class="form-control border-0 bg-transparent py-3 ps-0" placeholder="Buscar por código, nombre, nit..." value="{{ q }}" style="box-shadow: none; font-size: 1.1rem; outline: none;">
+            <button type="button" class="btn border-0 bg-transparent text-muted px-4" id="clear-search" style="z-index: 10; display: {% if q %}block{% else %}none{% endif %};" title="Limpiar búsqueda">
+                <i class="fas fa-times-circle fs-5 opacity-75"></i>
+            </button>
+        </div>
+        
+        {% if regimenes %}
+        <div class="dropdown shadow-sm rounded-pill bg-white" style="border: 1px solid rgba(0,0,0,0.05);">
+            <input type="hidden" name="regimen" id="regimenInput" value="{{ selected_regimen }}">
+            <button class="btn form-select-lg border-0 bg-transparent rounded-pill py-3 px-4 text-secondary fw-medium dropdown-toggle d-flex justify-content-between align-items-center w-100" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="box-shadow: none; min-width: 220px;">
+                <span id="regimenLabel">
+                    {% if selected_regimen %}{{ selected_regimen }}{% else %}Todos los Regímenes{% endif %}
+                </span>
+            </button>
+            <ul class="dropdown-menu border-0 shadow w-100" style="border-radius: 15px; max-height: 300px; overflow-y: auto;">
+                <li><a class="dropdown-item py-2 px-4 {% if not selected_regimen %}active bg-primary text-white{% endif %}" href="#" onclick="selectRegimen('', 'Todos los Regímenes', event)">Todos los Regímenes</a></li>
+                {% for r in regimenes %}
+                <li><a class="dropdown-item py-2 px-4 {% if r == selected_regimen %}active bg-primary text-white{% endif %}" href="#" onclick="selectRegimen('{{ r }}', '{{ r }}', event)">{{ r }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <script>
+            function selectRegimen(value, label, e) {
+                e.preventDefault();
+                document.getElementById('regimenInput').value = value;
+                document.getElementById('regimenLabel').textContent = label;
+                // Since base.html listens to the form submit, we can just trigger it
+                const form = document.getElementById('regimenInput').closest('form');
+                if (form) {
+                    form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                }
+            }
+        </script>
+        {% endif %}
+    </form>
+</div>
+
+<div class="glass-card">
+    <div id="table-container">
+        {% include "dashboard/partials/entidades_table.html" %}
+    </div>
+</div>
+
+<div class="d-block d-md-none mt-4 mb-3">
+    <a href="{% url 'export_csv' 'entidades' %}" class="btn btn-export w-100 py-3 shadow-sm" style="font-size: 1.1rem;"><i class="fas fa-file-csv me-2"></i>Exportar CSV</a>
+</div>
+{% endblock %}

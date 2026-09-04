@@ -1,0 +1,41 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: api_sm_mysql
+    env_file:
+      - .env
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  web:
+    build: .
+    container_name: api_sm_django
+    command: >
+      sh -c "sleep 15 && python manage.py makemigrations && python manage.py migrate && gunicorn --bind 0.0.0.0:8000 core.wsgi:application"
+    env_file:
+      - .env
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+
+  caddy:
+    image: caddy:2
+    container_name: api_sm_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    command: caddy reverse-proxy --from ${CADDY_DOMAIN:-localhost} --to web:8000
+    depends_on:
+      - web
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:
