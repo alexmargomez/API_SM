@@ -260,6 +260,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const searchInput = document.querySelector('input[name="q"]');
+            const searchForm = searchInput ? searchInput.closest('form') : document.querySelector('form[method="get"]');
             const tableContainer = document.getElementById('table-container');
             let debounceTimer;
 
@@ -284,28 +285,9 @@
                 });
             }
 
-            // Real-time search
-            if (searchInput && tableContainer) {
-                const clearBtn = document.getElementById('clear-search');
-                
-                if (clearBtn) {
-                    // Show/hide based on input length
-                    searchInput.addEventListener('input', function() {
-                        clearBtn.style.display = this.value.length > 0 ? 'block' : 'none';
-                    });
-                    
-                    // Clear logic
-                    clearBtn.addEventListener('click', function() {
-                        searchInput.value = '';
-                        clearBtn.style.display = 'none';
-                        searchInput.focus();
-                        // Trigger the search manually after clear
-                        triggerSearch('');
-                    });
-                }
-                
-                function triggerSearch(q) {
-                    const url = new URL(window.location.href);
+            function triggerSearch(q) {
+                const url = new URL(window.location.href);
+                if (searchForm) {
                     const formData = new FormData(searchForm);
                     for (const [key, value] of formData.entries()) {
                         if (key === 'q' && typeof q !== 'undefined') {
@@ -314,24 +296,40 @@
                             url.searchParams.set(key, value);
                         }
                     }
-                    url.searchParams.set('page', '1'); // Reset to page 1 on new search
-                    
-                    // Update browser URL without reloading
-                    window.history.replaceState({}, '', url);
-                    fetchResults(url);
+                } else if (typeof q !== 'undefined') {
+                    url.searchParams.set('q', q);
+                }
+                url.searchParams.set('page', '1'); // Reset to page 1 on new search
+                
+                // Update browser URL without reloading
+                window.history.replaceState({}, '', url);
+                fetchResults(url);
+            }
+
+            // Real-time search
+            if (searchInput && tableContainer) {
+                const clearBtn = document.getElementById('clear-search');
+                
+                if (clearBtn) {
+                    // Clear logic
+                    clearBtn.addEventListener('click', function() {
+                        searchInput.value = '';
+                        clearBtn.style.display = 'none';
+                        searchInput.focus();
+                        clearTimeout(debounceTimer);
+                        triggerSearch('');
+                    });
                 }
 
-                searchInput.addEventListener('keyup', function(e) {
+                searchInput.addEventListener('input', function() {
+                    if (clearBtn) {
+                        clearBtn.style.display = this.value.length > 0 ? 'block' : 'none';
+                    }
                     clearTimeout(debounceTimer);
                     const q = this.value.trim();
-                    
-                    // Don't trigger search on navigation keys
-                    const ignoredKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'];
-                    if (ignoredKeys.includes(e.key)) return;
-
                     debounceTimer = setTimeout(() => {
                         triggerSearch(q);
-                    }, 400); // 400ms debounce
+                    }, 300); // 300ms debounce
                 });
             }
 
@@ -362,14 +360,15 @@
             if (searchForm && tableContainer) {
                 searchForm.addEventListener('submit', function(e) {
                     e.preventDefault();
-                    triggerSearch();
+                    clearTimeout(debounceTimer);
+                    triggerSearch(searchInput ? searchInput.value.trim() : undefined);
                 });
                 
                 // Trigger submit on select change
                 const selects = searchForm.querySelectorAll('select');
                 selects.forEach(select => {
                     select.addEventListener('change', () => {
-                        triggerSearch();
+                        triggerSearch(searchInput ? searchInput.value.trim() : undefined);
                     });
                 });
             }

@@ -40,7 +40,13 @@
                 e.preventDefault();
                 document.getElementById('regimenInput').value = value;
                 document.getElementById('regimenLabel').textContent = label;
-                // Since base.html listens to the form submit, we can just trigger it
+                const menu = e.currentTarget.closest('.dropdown-menu');
+                if (menu) {
+                    menu.querySelectorAll('.dropdown-item').forEach(item => {
+                        item.classList.remove('active', 'bg-primary', 'text-white');
+                    });
+                    e.currentTarget.classList.add('active', 'bg-primary', 'text-white');
+                }
                 const form = document.getElementById('regimenInput').closest('form');
                 if (form) {
                     form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
