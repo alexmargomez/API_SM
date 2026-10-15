@@ -1,6 +1,6 @@
 services:
   db:
-    image: mysql:8.0
+    image: mariadb:11
     container_name: api_sm_mysql
     restart: unless-stopped
     command: >
@@ -9,7 +9,7 @@ services:
       --innodb-log-buffer-size=8M
       --max-connections=60
       --table-open-cache=400
-      --host-cache-size=0
+      --skip-name-resolve=ON
     env_file:
       - .env
     ports:
