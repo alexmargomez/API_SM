@@ -66,9 +66,9 @@ WSGI_APPLICATION = 'core.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.environ.get('DB_NAME', os.environ.get('MYSQL_DATABASE', 'api_sm_db')),
-        'USER': os.environ.get('DB_USER', os.environ.get('MYSQL_USER', 'api_user')),
-        'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('MYSQL_PASSWORD', 'api_password')),
+        'NAME': os.environ.get('DB_NAME', os.environ.get('MARIADB_DATABASE', 'api_sm_db')),
+        'USER': os.environ.get('DB_USER', os.environ.get('MARIADB_USER', 'api_user')),
+        'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('MARIADB_PASSWORD', 'api_password')),
         'HOST': os.environ.get('DB_HOST', 'db'),
         'PORT': os.environ.get('DB_PORT', '3306'),
     }
