@@ -20,7 +20,13 @@ var/
 .installed.cfg
 *.egg
 
-# Django
+# Node / Vue / Vite
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.local
+
+# Django & Logs
 *.log
 local_settings.py
 db.sqlite3
@@ -40,8 +46,10 @@ venv.bak/
 *.swp
 *.swo
 
-# Docker
+# Docker & Binaries
 mysql_data/
+cloudflared
+cloudflared.deb
 
 # Data Files
 *.xlsx

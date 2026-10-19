@@ -10,27 +10,76 @@ services:
       --max-connections=60
       --table-open-cache=400
       --skip-name-resolve=ON
-    env_file:
-      - .env
+    environment:
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-api_sm_db}"
+      MYSQL_USER: "${MYSQL_USER:-api_user}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-api_password}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-api_root_password}"
     ports:
-      - "3307:3306"
+      - "${DB_EXTERNAL_PORT:-3307}:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    networks:
+      - api_sm_network
 
-  web:
-    build: .
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: api_sm_django
     restart: unless-stopped
     command: >
-      sh -c "sleep 15 && python manage.py makemigrations && python manage.py migrate && gunicorn --bind 0.0.0.0:8000 core.wsgi:application"
+      sh -c "python manage.py makemigrations && python manage.py migrate && gunicorn --bind 0.0.0.0:${BACKEND_PORT:-8000} core.wsgi:application"
+    environment:
+      SECRET_KEY: "${SECRET_KEY:-django-insecure-default-key-for-dev}"
+      DEBUG: "${DEBUG:-True}"
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-*}"
+      CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-http://localhost,https://localhost,http://localhost:5173}"
+      DB_NAME: "${DB_NAME:-api_sm_db}"
+      DB_USER: "${DB_USER:-api_user}"
+      DB_PASSWORD: "${DB_PASSWORD:-api_password}"
+      DB_HOST: "${DB_HOST:-db}"
+      DB_PORT: "${DB_PORT:-3306}"
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
-      - .:/app
+      - ./backend:/app
+    networks:
+      - api_sm_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: api_sm_frontend
+    restart: unless-stopped
+    environment:
+      FRONTEND_PORT: "${FRONTEND_PORT:-5173}"
+      BACKEND_PORT: "${BACKEND_PORT:-8000}"
+      VITE_API_URL: "${VITE_API_URL:-/api}"
+      VITE_BACKEND_PROXY: "${VITE_BACKEND_PROXY:-http://backend:${BACKEND_PORT:-8000}}"
+    ports:
+      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    networks:
+      - api_sm_network
 
 volumes:
-  mysql_data:
+  mariadb_data:
+  frontend_node_modules:
+
+networks:
+  api_sm_network:
+    driver: bridge
