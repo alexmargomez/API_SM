@@ -1,7 +1,7 @@
 services:
   db:
     image: mariadb:11
-    container_name: api_sm_mysql
+    container_name: api_sm_mariadb
     restart: unless-stopped
     command: >
       --performance-schema=OFF
@@ -10,11 +10,13 @@ services:
       --max-connections=60
       --table-open-cache=400
       --skip-name-resolve=ON
+    env_file:
+      - .env
     environment:
-      MYSQL_DATABASE: "${MYSQL_DATABASE:-api_sm_db}"
-      MYSQL_USER: "${MYSQL_USER:-api_user}"
-      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-api_password}"
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-api_root_password}"
+      MARIADB_DATABASE: "${MARIADB_DATABASE:-${DB_NAME:-api_sm_db}}"
+      MARIADB_USER: "${MARIADB_USER:-${DB_USER:-api_user}}"
+      MARIADB_PASSWORD: "${MARIADB_PASSWORD:-${DB_PASSWORD:-api_password}}"
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD:-api_root_password}"
     ports:
       - "${DB_EXTERNAL_PORT:-3307}:3306"
     volumes:
@@ -35,14 +37,16 @@ services:
     restart: unless-stopped
     command: >
       sh -c "python manage.py makemigrations && python manage.py migrate && gunicorn --bind 0.0.0.0:${BACKEND_PORT:-8000} core.wsgi:application"
+    env_file:
+      - .env
     environment:
       SECRET_KEY: "${SECRET_KEY:-django-insecure-default-key-for-dev}"
       DEBUG: "${DEBUG:-True}"
       ALLOWED_HOSTS: "${ALLOWED_HOSTS:-*}"
-      CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-http://localhost,https://localhost,http://localhost:5173}"
-      DB_NAME: "${DB_NAME:-api_sm_db}"
-      DB_USER: "${DB_USER:-api_user}"
-      DB_PASSWORD: "${DB_PASSWORD:-api_password}"
+      CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-http://localhost,https://localhost,http://localhost:5174}"
+      DB_NAME: "${DB_NAME:-${MARIADB_DATABASE:-api_sm_db}}"
+      DB_USER: "${DB_USER:-${MARIADB_USER:-api_user}}"
+      DB_PASSWORD: "${DB_PASSWORD:-${MARIADB_PASSWORD:-api_password}}"
       DB_HOST: "${DB_HOST:-db}"
       DB_PORT: "${DB_PORT:-3306}"
     ports:
@@ -62,12 +66,12 @@ services:
     container_name: api_sm_frontend
     restart: unless-stopped
     environment:
-      FRONTEND_PORT: "${FRONTEND_PORT:-5173}"
+      FRONTEND_PORT: "${FRONTEND_PORT:-5174}"
       BACKEND_PORT: "${BACKEND_PORT:-8000}"
       VITE_API_URL: "${VITE_API_URL:-/api}"
       VITE_BACKEND_PROXY: "${VITE_BACKEND_PROXY:-http://backend:${BACKEND_PORT:-8000}}"
     ports:
-      - "${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+      - "${FRONTEND_PORT:-5174}:${FRONTEND_PORT:-5174}"
     depends_on:
       - backend
     volumes:
@@ -83,3 +87,5 @@ volumes:
 networks:
   api_sm_network:
     driver: bridge
+
+
