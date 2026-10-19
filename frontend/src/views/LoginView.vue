@@ -1,0 +1,131 @@
+<script setup>
+import { ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { loginAdmin } from '../stores/auth'
+
+const route = useRoute()
+const router = useRouter()
+
+const username = ref('')
+const password = ref('')
+const errorMessage = ref('')
+const loading = ref(false)
+
+async function handleSubmit() {
+  errorMessage.value = ''
+  loading.value = true
+
+  try {
+    await loginAdmin(username.value, password.value)
+    const nextPath = route.query.next || '/importar'
+    router.push(nextPath)
+  } catch (err) {
+    errorMessage.value = err.message || 'Usuario o contraseña incorrectos.'
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-5">
+      <div
+        class="glass-card shadow-lg border-0 position-relative overflow-hidden"
+        style="border-radius: 20px;"
+      >
+        <!-- Decoración de fondo -->
+        <div
+          class="position-absolute"
+          style="top: -50px; right: -50px; width: 150px; height: 150px; background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.2)); border-radius: 50%; filter: blur(30px);"
+        ></div>
+        <div
+          class="position-absolute"
+          style="bottom: -50px; left: -50px; width: 150px; height: 150px; background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(239, 68, 68, 0.2)); border-radius: 50%; filter: blur(30px);"
+        ></div>
+
+        <div class="p-4 p-md-5 position-relative" style="z-index: 1;">
+          <div class="text-center mb-5">
+            <div
+              class="d-inline-flex align-items-center justify-content-center bg-primary bg-opacity-10 text-primary mb-3"
+              style="width: 70px; height: 70px; border-radius: 20px;"
+            >
+              <i class="fas fa-user-shield fa-2x"></i>
+            </div>
+            <h2 class="fw-bold text-dark">Acceso Administrador</h2>
+            <p class="text-muted">Por favor, ingresa tus credenciales de seguridad.</p>
+          </div>
+
+          <form @submit.prevent="handleSubmit">
+            <div
+              v-if="errorMessage"
+              class="alert alert-danger shadow-sm border-0"
+              style="border-radius: 12px; border-left: 4px solid #dc3545 !important;"
+            >
+              <i class="fas fa-exclamation-circle me-2"></i> {{ errorMessage }}
+            </div>
+
+            <div class="mb-4">
+              <label class="form-label fw-bold text-secondary">Usuario</label>
+              <div
+                class="input-group input-group-lg shadow-sm"
+                style="border-radius: 12px; overflow: hidden; border: 1px solid rgba(0,0,0,0.05);"
+              >
+                <span class="input-group-text bg-white border-0 text-muted px-4">
+                  <i class="fas fa-user"></i>
+                </span>
+                <input
+                  v-model="username"
+                  type="text"
+                  class="form-control border-0 bg-white"
+                  placeholder="Tu nombre de usuario"
+                  required
+                  autofocus
+                />
+              </div>
+            </div>
+
+            <div class="mb-5">
+              <label class="form-label fw-bold text-secondary">Contraseña</label>
+              <div
+                class="input-group input-group-lg shadow-sm"
+                style="border-radius: 12px; overflow: hidden; border: 1px solid rgba(0,0,0,0.05);"
+              >
+                <span class="input-group-text bg-white border-0 text-muted px-4">
+                  <i class="fas fa-lock"></i>
+                </span>
+                <input
+                  v-model="password"
+                  type="password"
+                  class="form-control border-0 bg-white"
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              class="btn btn-primary w-100 btn-lg shadow fw-bold d-flex justify-content-center align-items-center gap-2"
+              style="border-radius: 12px; background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%); border: none; padding: 15px;"
+              :disabled="loading"
+            >
+              <span v-if="loading" class="spinner-border spinner-border-sm"></span>
+              <i v-else class="fas fa-sign-in-alt"></i>
+              {{ loading ? 'Verificando...' : 'Iniciar Sesión Segura' }}
+            </button>
+          </form>
+
+          <div class="text-center mt-4">
+            <RouterLink
+              :to="{ name: 'dashboard_index' }"
+              class="text-decoration-none text-muted"
+            >
+              <i class="fas fa-arrow-left me-1"></i> Volver al Inicio
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

@@ -1,0 +1,9 @@
+# GitHub Linguist Configuration
+*.py linguist-detectable=true
+*.vue linguist-detectable=true
+*.js linguist-detectable=true
+*.css linguist-detectable=true
+
+# Exclude Vite HTML shell and lockfiles from language statistics
+frontend/index.html linguist-vendored
+package-lock.json linguist-generated=true
