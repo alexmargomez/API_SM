@@ -103,4 +103,24 @@ export const apiService = {
   me() {
     return request('/auth/me/')
   },
+
+  inspectFhirBundle(rawJson) {
+    return request('/tools/fhir-inspector/', {
+      method: 'POST',
+      body: JSON.stringify({ raw_json: rawJson }),
+    })
+  },
+
+  inspectFhirFile(file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request('/tools/fhir-inspector/', {
+      method: 'POST',
+      body: formData,
+    })
+  },
+
+  getFhirSampleAnalysis() {
+    return request('/tools/fhir-inspector/')
+  },
 }

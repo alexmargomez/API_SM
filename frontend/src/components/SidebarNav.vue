@@ -70,8 +70,18 @@ async function handleLogout() {
         <i class="fas fa-syringe"></i> Clasificación Única de Procedimientos en Salud (CUPS)
       </RouterLink>
 
+      <!-- Separador visual para el módulo independiente de Herramientas -->
+      <hr class="my-3 mx-3 border-secondary opacity-25" />
+      <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mb-1 text-muted text-uppercase" style="font-size: 0.72rem; letter-spacing: 0.06em;">
+        <span>Herramientas Res. 1888</span>
+      </h6>
+      <RouterLink class="nav-link fw-semibold" :to="{ name: 'fhir_inspector' }">
+        <i class="fas fa-microscope text-primary"></i> Inspector FHIR (RDA)
+      </RouterLink>
+
       <template v-if="authState.isAuthenticated && authState.user?.is_superuser">
-        <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted text-uppercase">
+        <hr class="my-3 mx-3 border-secondary opacity-25" />
+        <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mb-1 text-muted text-uppercase" style="font-size: 0.72rem; letter-spacing: 0.06em;">
           <span>Administración</span>
         </h6>
         <RouterLink class="nav-link fw-bold" :to="{ name: 'import_data' }">
@@ -79,7 +89,8 @@ async function handleLogout() {
         </RouterLink>
       </template>
 
-      <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted text-uppercase">
+      <hr class="my-3 mx-3 border-secondary opacity-25" />
+      <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mb-1 text-muted text-uppercase" style="font-size: 0.72rem; letter-spacing: 0.06em;">
         <span>Desarrolladores</span>
       </h6>
       <RouterLink class="nav-link fw-bold" :to="{ name: 'api_docs' }">

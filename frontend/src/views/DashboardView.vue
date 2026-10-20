@@ -90,8 +90,32 @@ onMounted(async () => {
       </div>
     </div>
 
+    <!-- Separador de Herramientas Técnicas -->
+    <hr class="my-4 border-secondary opacity-25" />
+
+    <div class="glass-card mb-4">
+      <div class="row align-items-center g-4">
+        <div class="col-md-8">
+          <span class="badge bg-primary bg-opacity-10 text-primary px-3 py-2 rounded-pill fw-semibold mb-2">
+            <i class="fas fa-microscope me-1"></i> Módulo de Herramientas Técnicas • Resolución 1888 (IHCE)
+          </span>
+          <h3 class="h4 fw-bold mb-2">Inspector y Traductor de Bundles FHIR (RDA) a Lenguaje Claro</h3>
+          <p class="text-muted mb-0">
+            Convierte cualquier JSON crudo de Resumen Digital de Atención (RDA) en secciones legibles en español
+            (Paciente, Atención, Diagnósticos CIE-10, Prescripciones de Medicamentos, Solicitudes CUPS, Alergias) y
+            verifica automáticamente si los códigos enviados existen en los catálogos oficiales.
+          </p>
+        </div>
+        <div class="col-md-4 text-md-end">
+          <RouterLink :to="{ name: 'fhir_inspector' }" class="btn btn-premium w-100">
+            <i class="fas fa-search-plus me-2"></i> Abrir Inspector FHIR
+          </RouterLink>
+        </div>
+      </div>
+    </div>
+
     <!-- Disclaimer Legal -->
-    <div class="mt-5 text-center">
+    <div class="mt-4 text-center">
       <div
         class="p-4 rounded-4"
         style="background-color: rgba(0,0,0,0.02); border: 1px dashed rgba(0,0,0,0.1);"
