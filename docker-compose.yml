@@ -10,8 +10,6 @@ services:
       --max-connections=60
       --table-open-cache=400
       --skip-name-resolve=ON
-    env_file:
-      - .env
     environment:
       MARIADB_DATABASE: "${MARIADB_DATABASE:-${DB_NAME:-api_sm_db}}"
       MARIADB_USER: "${MARIADB_USER:-${DB_USER:-api_user}}"
