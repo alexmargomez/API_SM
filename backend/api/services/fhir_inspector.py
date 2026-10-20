@@ -66,7 +66,8 @@ def _safe_str(val: Any) -> str:
 
 
 def _extract_coding_info(codeable: Any) -> Dict[str, str]:
-    """Extrae código, display, texto y system desde un CodeableConcept o Coding."""
+    """Extrae código, display, texto y system desde un CodeableConcept o Coding,
+    priorizando los CodeSystem colombianos de Minsalud / IHCE Res. 1888 sobre HL7 v2-0203."""
     if not isinstance(codeable, dict):
         return {'code': '', 'display': '', 'system': '', 'text': ''}
 
@@ -79,13 +80,28 @@ def _extract_coding_info(codeable: Any) -> Dict[str, str]:
             'text': _safe_str(codeable.get('text') or codeable.get('display') or codeable.get('code')),
         }
 
-    codings = codeable.get('coding') or []
+    codings = [c for c in (codeable.get('coding') or []) if isinstance(c, dict)]
     text = _safe_str(codeable.get('text'))
-    if isinstance(codings, list) and len(codings) > 0 and isinstance(codings[0], dict):
-        first = codings[0]
-        code = _safe_str(first.get('code'))
-        display = _safe_str(first.get('display'))
-        system = _safe_str(first.get('system'))
+    if codings:
+        selected = codings[0]
+        if len(codings) > 1:
+            # 1. Priorizar CodeSystem oficial de Minsalud / IHCE Colombia
+            for c in codings:
+                sys_low = _safe_str(c.get('system')).lower()
+                if any(k in sys_low for k in ('minsalud.gov.co', 'colombian', 'co.fhir.guide', 'sispro')):
+                    selected = c
+                    break
+            else:
+                # 2. Si el primero es el genérico HL7 v2-0203 (PN, TAX, PRN), preferir otro más específico
+                for c in codings:
+                    sys_low = _safe_str(c.get('system')).lower()
+                    if 'v2-0203' not in sys_low and c.get('code'):
+                        selected = c
+                        break
+
+        code = _safe_str(selected.get('code'))
+        display = _safe_str(selected.get('display'))
+        system = _safe_str(selected.get('system'))
         label = display or text or code
         return {
             'code': code,
@@ -145,6 +161,11 @@ def _extract_extension_value(ext: Optional[Dict[str, Any]]) -> str:
         return info['text']
     if 'valueReference' in ext and isinstance(ext['valueReference'], dict):
         return _safe_str(ext['valueReference'].get('display') or ext['valueReference'].get('reference'))
+    if isinstance(ext.get('extension'), list):
+        sub_vals = [_extract_extension_value(sub) for sub in ext['extension'] if isinstance(sub, dict)]
+        sub_vals = [v for v in sub_vals if v]
+        if sub_vals:
+            return ' | '.join(sub_vals)
     return ''
 
 
@@ -387,20 +408,29 @@ class FhirBundleInspectorService:
         eps_set: set,
     ) -> None:
         if rtype == 'Organization':
-            for ident in res.get('identifier') or []:
+            idents = res.get('identifier') or []
+            for ident in idents:
                 if not isinstance(ident, dict):
                     continue
                 val = _safe_str(ident.get('value'))
                 type_info = _extract_coding_info(ident.get('type'))
                 sys_str = _safe_str(ident.get('system')).lower()
+                code_low = type_info['code'].lower()
+                if any(k in code_low or k in sys_str for k in ('nit', 'tax', 'prestador', 'reps', 'prn', 'prv')):
+                    continue
                 if val and (
                     'eapb' in sys_str
                     or 'administradora' in sys_str
-                    or 'eapb' in type_info['code'].lower()
+                    or 'eapb' in code_low
+                    or 'pay' in code_low
                     or 'eps' in type_info['text'].lower()
                     or len(val) <= 8
                 ):
                     eps_set.add(val.upper())
+            if not idents:
+                org_id = _safe_str(res.get('id'))
+                if org_id and len(org_id) <= 8 and not org_id.lower().startswith('organization'):
+                    eps_set.add(org_id.upper())
 
         elif rtype == 'Condition':
             for c in _extract_all_codings(res.get('code')):
@@ -630,8 +660,9 @@ class FhirBundleInspectorService:
         narratives = []
 
         for pat in patients:
-            # Documento de identidad
+            # Documento de identidad (prioriza ColombianPersonIdentifier -> ej. DE-095305827-14)
             doc_type = ''
+            doc_type_display = ''
             doc_number = ''
             doc_country = ''
             for ident in pat.get('identifier') or []:
@@ -642,8 +673,20 @@ class FhirBundleInspectorService:
                 if val and not doc_number:
                     doc_number = val
                     doc_type = t_info['code'] or t_info['display'] or 'DOC'
-                    country_ext = _find_extension(ident.get('extension'), 'country') or _find_extension(ident.get('extension'), 'pais')
+                    doc_type_display = t_info['display']
+                    country_ext = (
+                        _find_extension(ident.get('extension'), 'divipolaCountry')
+                        or _find_extension(ident.get('extension'), 'country')
+                        or _find_extension(ident.get('extension'), 'pais')
+                    )
                     doc_country = _extract_extension_value(country_ext)
+
+            doc_ihce_code = f"{doc_type}-{doc_number}" if doc_type and doc_number else (doc_number or doc_type or 'No registrado')
+            doc_full_label = (
+                f"{doc_ihce_code} ({doc_type_display})"
+                if doc_type_display and doc_type_display.lower() != doc_type.lower()
+                else doc_ihce_code
+            )
 
             # Nombres y apellidos (incluyendo fathersFamily y mothersFamily de Res 1888)
             first_name = ''
@@ -675,9 +718,13 @@ class FhirBundleInspectorService:
             gender_code = _safe_str(pat.get('gender')).lower()
             gender_label = GENDER_MAP.get(gender_code, gender_code or 'No especificado')
 
-            # Extensiones colombianas del Paciente (Sexo biológico, Identidad de género, Etnia, Discapacidad, Nacionalidad, Ocupación)
-            exts = pat.get('extension') or []
-            bio_sex = _extract_extension_value(_find_extension(exts, 'biologicalSex') or _find_extension(exts, 'sexoBiologico'))
+            # Extensiones colombianas del Paciente (Sexo biológico en extension o _gender.extension, Identidad de género, Etnia, Discapacidad, Nacionalidad, Ocupación)
+            exts = (pat.get('extension') or []) + ((pat.get('_gender') or {}).get('extension') or [])
+            bio_sex = _extract_extension_value(
+                _find_extension(exts, 'biologicalSex')
+                or _find_extension(exts, 'biologicalGender')
+                or _find_extension(exts, 'sexoBiologico')
+            )
             gender_id = _extract_extension_value(_find_extension(exts, 'genderIdentity') or _find_extension(exts, 'identidadGenero'))
             nationality = _extract_extension_value(_find_extension(exts, 'nationality') or _find_extension(exts, 'nacionalidad'))
             ethnicity = _extract_extension_value(_find_extension(exts, 'ethnicity') or _find_extension(exts, 'etnia'))
@@ -704,7 +751,7 @@ class FhirBundleInspectorService:
                 zone_text = ZONA_MAP.get(zone_raw, zone_raw)
 
             pat_narrative = (
-                f"Paciente **{full_name or 'Sin nombre registrado'}**, identificado con **{doc_type} {doc_number or 'N/A'}**, "
+                f"Paciente **{full_name or 'Sin nombre registrado'}**, identificado con **{doc_full_label}**, "
                 f"fecha de nacimiento **{birth_date or 'No indicada'}** ({age_label or 'Edad no calculable'}), "
                 f"sexo **{bio_sex or gender_label}**."
             )
@@ -714,12 +761,12 @@ class FhirBundleInspectorService:
 
             items.append({
                 'title': full_name or f"Paciente ({pat.get('id', 'Sin ID')})",
-                'subtitle': f"Documento: {doc_type} {doc_number}",
-                'badge': age_label or gender_label,
+                'subtitle': f"Documento: {doc_full_label}",
+                'badge': doc_ihce_code if doc_type and doc_number else (age_label or gender_label),
                 'badge_type': 'info',
                 'explanation': pat_narrative,
                 'fields': [
-                    {'label': 'Tipo y Número de Documento', 'value': f"{doc_type} {doc_number}".strip() or 'No registrado'},
+                    {'label': 'Tipo y Número de Documento (IHCE)', 'value': doc_full_label},
                     {'label': 'Primer y Segundo Nombre', 'value': f"{first_name} {second_name}".strip() or 'No registrado'},
                     {'label': 'Primer y Segundo Apellido', 'value': f"{first_surname} {second_surname}".strip() or 'No registrado'},
                     {'label': 'Fecha de Nacimiento y Edad', 'value': f"{birth_date} ({age_label})" if age_label else (birth_date or 'No registrada')},
@@ -773,11 +820,18 @@ class FhirBundleInspectorService:
                 sys_str = _safe_str(ident.get('system')).lower()
                 code_upper = t_info['code'].upper()
 
-                if 'nit' in code_upper or 'tax' in code_upper or 'nit' in sys_str:
+                if 'NIT' in code_upper or 'TAX' in code_upper or 'nit' in sys_str:
                     nit_val = val
-                elif 'reps' in code_upper or 'prestador' in sys_str or 'reps' in sys_str or 'prv' in code_upper:
+                elif (
+                    'REPS' in code_upper
+                    or 'PRESTADOR' in code_upper
+                    or 'PRN' in code_upper
+                    or 'PRV' in code_upper
+                    or 'prestador' in sys_str
+                    or 'reps' in sys_str
+                ):
                     reps_val = val
-                elif 'eapb' in code_upper or 'pay' in code_upper or 'administradora' in sys_str or 'eapb' in sys_str:
+                elif 'EAPB' in code_upper or 'PAY' in code_upper or 'administradora' in sys_str or 'eapb' in sys_str:
                     eapb_val = val
                 elif not eapb_val and len(val) <= 6:
                     eapb_val = val
@@ -785,6 +839,8 @@ class FhirBundleInspectorService:
                     reps_val = val
 
             is_ips = (org_id and org_id == custodian_ref) or bool(reps_val and not eapb_val)
+            if not is_ips and not eapb_val and org_id and len(org_id) <= 8 and not org_id.lower().startswith('organization'):
+                eapb_val = org_id
             role_label = 'IPS Prestadora de Salud' if is_ips else 'EPS / Aseguradora (Pagador EAPB)'
 
             catalog_check = None
@@ -857,7 +913,7 @@ class FhirBundleInspectorService:
             for ident in prac.get('identifier') or []:
                 if isinstance(ident, dict) and ident.get('value'):
                     t_code = _extract_coding_info(ident.get('type'))['code'] or 'DOC'
-                    p_doc = f"{t_code} {_safe_str(ident.get('value'))}"
+                    p_doc = f"{t_code}-{_safe_str(ident.get('value'))}"
                     break
             p_name = ''
             names = prac.get('name') or []
@@ -876,6 +932,20 @@ class FhirBundleInspectorService:
             class_info = _extract_coding_info(enc.get('class'))
             service_type = _extract_coding_info(enc.get('serviceType'))['text']
 
+            # Revisar también Encounter.type[] (Modalidad, Grupo de Servicios, Entorno de Atención en Res. 1888)
+            modality_text = ''
+            type_service_group = ''
+            type_env_care = ''
+            for t_concept in enc.get('type') or []:
+                t_info = _extract_coding_info(t_concept)
+                sys_low = t_info['system'].lower()
+                if 'modality' in sys_low or 'modalidad' in sys_low:
+                    modality_text = t_info['text']
+                elif 'gruposervicio' in sys_low or 'servicegroup' in sys_low:
+                    type_service_group = t_info['text']
+                elif 'entorno' in sys_low or 'environment' in sys_low:
+                    type_env_care = t_info['text']
+
             period = enc.get('period') or {}
             start_dt = _safe_str(period.get('start'))
             end_dt = _safe_str(period.get('end'))
@@ -891,11 +961,23 @@ class FhirBundleInspectorService:
 
             # Extensiones del encuentro (Grupo de servicios, entorno, condición de egreso)
             exts = enc.get('extension') or []
-            service_group = _extract_extension_value(_find_extension(exts, 'serviceGroup') or _find_extension(exts, 'grupoServicio'))
-            env_care = _extract_extension_value(_find_extension(exts, 'environment') or _find_extension(exts, 'entorno'))
+            service_group = (
+                _extract_extension_value(_find_extension(exts, 'serviceGroup') or _find_extension(exts, 'grupoServicio'))
+                or type_service_group
+            )
+            env_care = (
+                _extract_extension_value(_find_extension(exts, 'environment') or _find_extension(exts, 'entorno'))
+                or type_env_care
+            )
+            if not discharge_disp:
+                discharge_disp = _extract_extension_value(
+                    _find_extension(exts, 'dischargeDisposition') or _find_extension(exts, 'destinoEgreso')
+                )
+
+            modality_combined = f"{class_info['text']} / {modality_text}".strip(' /') if modality_text else class_info['text']
 
             explanation = (
-                f"Atención en estado **{status_label}**, modalidad **{class_info['text'] or 'Ambulatoria'}**"
+                f"Atención en estado **{status_label}**, modalidad **{modality_combined or 'Ambulatoria'}**"
                 + (f", servicio **{service_type or service_group}**" if (service_type or service_group) else "")
                 + f", iniciada el **{start_dt or 'N/A'}** y finalizada el **{end_dt or 'N/A'}**. "
                 f"Atendido por: **{prof_text}**. Causa externa / motivo: **{reason_text}**."
@@ -905,15 +987,15 @@ class FhirBundleInspectorService:
             narratives.append(explanation)
 
             items.append({
-                'title': f"Atención Clínica ({class_info['text'] or service_type or 'Encuentro'})",
+                'title': f"Atención Clínica ({modality_combined or service_type or 'Encuentro'})",
                 'subtitle': f"Inicio: {start_dt or 'N/A'} — Fin: {end_dt or 'N/A'}",
                 'badge': status_label,
                 'badge_type': 'success' if status_raw == 'finished' else 'info',
                 'explanation': explanation,
                 'fields': [
                     {'label': 'Estado de la Atención', 'value': status_label},
-                    {'label': 'Modalidad / Clase de Encuentro', 'value': class_info['text'] or 'No especificada'},
-                    {'label': 'Tipo / Grupo de Servicio', 'value': service_type or service_group or 'No especificado'},
+                    {'label': 'Modalidad / Clase de Encuentro', 'value': modality_combined or 'No especificada'},
+                    {'label': 'Tipo / Grupo de Servicio', 'value': f"{service_group} — {service_type}".strip(' —') or 'No especificado'},
                     {'label': 'Entorno de Atención', 'value': env_care or 'Institucional / No especificado'},
                     {'label': 'Fecha y Hora de Inicio', 'value': start_dt or 'No registrada'},
                     {'label': 'Fecha y Hora de Fin / Egreso', 'value': end_dt or 'No registrada'},
@@ -1083,9 +1165,10 @@ class FhirBundleInspectorService:
             freq_text = f"cada {period} {p_unit}" if period and p_unit else (f"{freq} vez/veces" if freq else 'Segun indicación médica')
 
             bounds = repeat.get('boundsDuration') or {}
-            dur_val = bounds.get('value')
-            dur_unit = PERIOD_UNIT_MAP.get(_safe_str(bounds.get('unit') or bounds.get('code')), _safe_str(bounds.get('unit') or bounds.get('code')))
-            duration_text = f"durante {dur_val} {dur_unit}" if dur_val else 'Duración no especificada'
+            dur_val = bounds.get('value') if bounds.get('value') is not None else repeat.get('duration')
+            raw_dur_unit = _safe_str(bounds.get('unit') or bounds.get('code') or repeat.get('durationUnit'))
+            dur_unit = PERIOD_UNIT_MAP.get(raw_dur_unit, raw_dur_unit)
+            duration_text = f"durante {dur_val} {dur_unit}".strip() if dur_val is not None else 'Duración no especificada'
 
             # Cantidad total prescrita (dispenseRequest)
             disp_req = mreq.get('dispenseRequest') or {}
@@ -1217,8 +1300,9 @@ class FhirBundleInspectorService:
                 concept = resolved_med.get('code')
 
         codings = _extract_all_codings(concept)
+        concept_text = _safe_str((concept or {}).get('text'))
         if not codings:
-            txt = _safe_str((concept or {}).get('text')) or 'Medicamento sin descripción'
+            txt = concept_text or 'Medicamento sin descripción'
             return {'name': txt, 'codes_label': 'Sin código CUM/IUM/DCI'}
 
         names = [c['display'] for c in codings if c['display']]
@@ -1235,6 +1319,8 @@ class FhirBundleInspectorService:
             codes_formatted.append(f"{tag}: {c['code']}" + (f" ({c['display']})" if c['display'] else ''))
 
         primary_name = names[0] if names else codings[0]['code']
+        if concept_text and concept_text.lower() not in primary_name.lower():
+            primary_name = f"{primary_name} ({concept_text})"
         return {
             'name': primary_name,
             'codes_label': ' | '.join(codes_formatted),
