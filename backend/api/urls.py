@@ -19,4 +19,7 @@ urlpatterns = [
     path('auth/login/', views.auth_login, name='auth_login'),
     path('auth/logout/', views.auth_logout, name='auth_logout'),
     path('auth/me/', views.auth_me, name='auth_me'),
+
+    # Herramientas Técnicas (Inspector / Traductor FHIR Res. 1888)
+    path('tools/fhir-inspector/', views.inspect_fhir_bundle, name='tools_fhir_inspector'),
 ]

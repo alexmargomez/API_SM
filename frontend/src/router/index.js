@@ -8,6 +8,7 @@ import CupsView from '../views/CupsView.vue'
 import ImportView from '../views/ImportView.vue'
 import DocsView from '../views/DocsView.vue'
 import LoginView from '../views/LoginView.vue'
+import FhirInspectorView from '../views/FhirInspectorView.vue'
 
 const routes = [
   {
@@ -33,6 +34,12 @@ const routes = [
     name: 'manage_cups',
     component: CupsView,
     meta: { title: 'Gestión de CUPS - API SM' },
+  },
+  {
+    path: '/inspector-fhir',
+    name: 'fhir_inspector',
+    component: FhirInspectorView,
+    meta: { title: 'Inspector y Traductor FHIR (Res. 1888) - API SM' },
   },
   {
     path: '/importar',

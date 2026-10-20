@@ -15,7 +15,11 @@ from .serializers import (
     Cie10Serializer,
     CupsSerializer,
 )
-from .services import CatalogImporterService, CatalogExporterService
+from .services import (
+    CatalogImporterService,
+    CatalogExporterService,
+    FhirBundleInspectorService,
+)
 
 
 # ============================================================================
@@ -276,3 +280,48 @@ def auth_me(request):
             'is_superuser': request.user.is_superuser,
         }
     })
+
+
+# ============================================================================
+# 4. HERRAMIENTAS TÉCNICAS (Inspector y Traductor FHIR Resolución 1888 / IHCE)
+# ============================================================================
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def inspect_fhir_bundle(request):
+    if request.method == 'GET':
+        import json as _json
+        sample = FhirBundleInspectorService.get_sample_bundle()
+        result = FhirBundleInspectorService.inspect_payload(sample)
+        result['sample_raw_json'] = _json.dumps(sample, indent=2, ensure_ascii=False)
+        return Response(result, status=status.HTTP_200_OK)
+
+    uploaded_file = request.FILES.get('file')
+    if uploaded_file is not None:
+        try:
+            raw_input = uploaded_file.read().decode('utf-8-sig', errors='replace')
+        except Exception as exc:
+            return Response(
+                {'error': f'No se pudo leer el archivo subido: {str(exc)}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    else:
+        payload = request.data
+        raw_input = payload
+        if isinstance(payload, dict):
+            if 'raw_json' in payload:
+                raw_input = payload.get('raw_json')
+            elif 'bundle' in payload and 'resourceType' not in payload:
+                raw_input = payload.get('bundle')
+
+    try:
+        result = FhirBundleInspectorService.inspect_payload(raw_input)
+        return Response(result, status=status.HTTP_200_OK)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response(
+            {'error': f'Error al analizar el Bundle FHIR: {str(exc)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
