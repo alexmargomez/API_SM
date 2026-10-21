@@ -43,12 +43,48 @@ CLINICAL_STATUS_MAP = {
 }
 
 VERIFICATION_STATUS_MAP = {
-    'unconfirmed': 'Impresión diagnóstica (No confirmado)',
-    'provisional': 'Impresión diagnóstica (Provisional)',
-    'differential': 'Diagnóstico diferencial',
+    'unconfirmed': 'No confirmado',
+    'provisional': 'Provisional',
+    'differential': 'Diferencial',
     'confirmed': 'Confirmado',
-    'refuted': 'Descartado / Refutado',
+    'refuted': 'Refutado / Descartado',
     'entered-in-error': 'Ingresado por error',
+}
+
+FAMILY_HISTORY_STATUS_MAP = {
+    'partial': 'Parcial',
+    'completed': 'Completado',
+    'entered-in-error': 'Ingresado por error',
+    'health-unknown': 'Salud desconocida',
+}
+
+MED_STATEMENT_STATUS_MAP = {
+    'active': 'Activo',
+    'completed': 'Completado',
+    'entered-in-error': 'Ingresado por error',
+    'intended': 'Previsto',
+    'stopped': 'Suspendido',
+    'on-hold': 'En pausa',
+    'unknown': 'Desconocido',
+    'not-taken': 'No tomado',
+}
+
+ALLERGY_CATEGORY_MAP = {
+    'food': '02 - Alimento',
+    'medication': '01 - Medicamento',
+    'environment': '03 - Sustancia del ambiente',
+    'biologic': '04 - Biológico',
+}
+
+RISK_STATUS_MAP = {
+    'registered': 'Registrado',
+    'preliminary': 'Preliminar',
+    'final': 'Final',
+    'amended': 'Modificado',
+    'corrected': 'Corregido',
+    'cancelled': 'Cancelado',
+    'entered-in-error': 'Ingresado por error',
+    'unknown': 'Desconocido',
 }
 
 ZONA_MAP = {
@@ -319,8 +355,9 @@ class FhirBundleInspectorService:
             resources_by_type.get('Encounter', []),
             resources_by_type.get('Practitioner', []),
             resources_by_type.get('PractitionerRole', []),
-             resources_by_type.get('Location', []),
+            resources_by_type.get('Location', []),
             resource_index,
+            composition,
         )
         mod_diagnosticos = cls._build_conditions_module(
             resources_by_type.get('Condition', []),
@@ -859,7 +896,11 @@ class FhirBundleInspectorService:
 
             explanation = (
                 f"**{role_label}:** {org_name} "
-                + (f"(NIT: {nit_val}, Código REPS: {reps_val})" if is_ips else f"(Código EAPB: {eapb_val or 'No enviado'}, NIT: {nit_val or 'N/A'})")
+                + (
+                    f"(NIT: {nit_val or 'N/A'}, Código REPS: {reps_val or 'N/A'})"
+                    if is_ips
+                    else f"(Código EAPB: {eapb_val or 'No enviado'}, NIT: {nit_val or 'N/A'})"
+                )
             )
             narratives.append(explanation)
 
@@ -902,6 +943,7 @@ class FhirBundleInspectorService:
         practitioner_roles: List[Dict[str, Any]],
         locations: List[Dict[str, Any]],
         resource_index: Dict[str, Dict[str, Any]],
+        composition: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         items = []
         narratives = []
@@ -1007,20 +1049,59 @@ class FhirBundleInspectorService:
                 'raw_resource': enc,
             })
 
-        # Si hay profesionales pero no hay Encounter (ej. RDA de Paciente)
-        if not items and practitioners:
-            for prac in practitioners:
-                items.append({
-                    'title': f"Profesional Responsable: {prof_text}",
-                    'subtitle': 'Autor del Resumen Digital de Atención (RDA)',
-                    'badge': 'Profesional',
-                    'badge_type': 'info',
-                    'explanation': f"El RDA fue firmado/generado por el profesional de la salud **{prof_text}**.",
-                    'fields': [
-                        {'label': 'Profesional que registra', 'value': prof_text},
-                    ],
-                    'raw_resource': prac,
-                })
+        # Si no hay Encounter pero sí hay Composition.event[] o profesionales (ej. RDA de Paciente / Antecedentes)
+        if not items and (practitioners or (composition and composition.get('event'))):
+            ev_modality = ''
+            ev_service_group = ''
+            ev_start = ''
+            ev_end = ''
+            events = (composition or {}).get('event') or []
+            if isinstance(events, list) and events and isinstance(events[0], dict):
+                ev0 = events[0]
+                ev_period = ev0.get('period') or {}
+                ev_start = _safe_str(ev_period.get('start'))
+                ev_end = _safe_str(ev_period.get('end'))
+                for c_obj in ev0.get('code') or []:
+                    c_info = _extract_coding_info(c_obj)
+                    sys_low = c_info['system'].lower()
+                    if 'modality' in sys_low or 'modalidad' in sys_low:
+                        ev_modality = c_info['text']
+                    elif 'gruposervicio' in sys_low or 'servicegroup' in sys_low:
+                        ev_service_group = c_info['text']
+
+            explanation = f"El RDA fue firmado/generado por el profesional de la salud **{prof_text}**."
+            if ev_modality or ev_service_group or ev_start:
+                explanation += (
+                    f" Evento de atención reportado en el encabezado: Modalidad **{ev_modality or 'N/A'}**, "
+                    f"Grupo de servicio **{ev_service_group or 'N/A'}**, "
+                    f"Inicio **{ev_start or 'N/A'}** — Fin **{ev_end or 'N/A'}**."
+                )
+            narratives.append(explanation)
+
+            fields = [
+                {'label': 'Profesional que registra', 'value': prof_text},
+            ]
+            if ev_modality:
+                fields.append({'label': 'Modalidad de Atención (Composition.event)', 'value': ev_modality})
+            if ev_service_group:
+                fields.append({'label': 'Grupo de Servicios (Composition.event)', 'value': ev_service_group})
+            if ev_start or ev_end:
+                fields.append({'label': 'Fecha y Hora de Inicio del Evento', 'value': ev_start or 'No registrada'})
+                fields.append({'label': 'Fecha y Hora de Fin del Evento', 'value': ev_end or 'No registrada'})
+
+            items.append({
+                'title': f"Profesional Responsable: {prof_text}",
+                'subtitle': (
+                    f"Modalidad: {ev_modality} • Servicio: {ev_service_group} • Inicio: {ev_start}".strip(' •')
+                    if (ev_modality or ev_service_group or ev_start)
+                    else 'Autor del Resumen Digital de Atención (RDA)'
+                ),
+                'badge': ev_service_group or 'Profesional',
+                'badge_type': 'info',
+                'explanation': explanation,
+                'fields': fields,
+                'raw_resource': practitioners[0] if practitioners else (composition or {}),
+            })
 
         return {
             'id': 'atencion',
@@ -1028,7 +1109,7 @@ class FhirBundleInspectorService:
             'fa_icon': 'fas fa-user-md',
             'color': 'secondary',
             'count': len(items),
-            'narrative': ' '.join(narratives) if narratives else (f"Profesional que registra el RDA: **{prof_text}** (Sin bloque Encounter por ser RDA de antecedentes)." if practitioners else 'No se encontró información de encuentro clínico.'),
+            'narrative': ' '.join(narratives) if narratives else 'No se encontró información de encuentro clínico.',
             'items': items,
         }
 
@@ -1059,23 +1140,46 @@ class FhirBundleInspectorService:
 
         for idx, cond in enumerate(conditions):
             cid = _safe_str(cond.get('id'))
-            code_info = _extract_coding_info(cond.get('code'))
+            code_obj = cond.get('code') or {}
+            code_info = _extract_coding_info(code_obj)
             cie_code = code_info['code'].upper()
             sent_display = code_info['display'] or code_info['text']
 
             clin_status_code = _extract_coding_info(cond.get('clinicalStatus'))['code'].lower()
-            clin_status = CLINICAL_STATUS_MAP.get(clin_status_code, clin_status_code or 'Activo')
+            clin_status = (
+                CLINICAL_STATUS_MAP.get(clin_status_code, clin_status_code)
+                if clin_status_code
+                else 'No especificado en el JSON'
+            )
 
             verif_code = _extract_coding_info(cond.get('verificationStatus'))['code'].lower()
-            verif_status = VERIFICATION_STATUS_MAP.get(verif_code, _extract_coding_info(cond.get('verificationStatus'))['text'] or 'Confirmado')
+            verif_status = VERIFICATION_STATUS_MAP.get(
+                verif_code,
+                _extract_coding_info(cond.get('verificationStatus'))['text'] or 'No especificado',
+            )
 
             sec_title = section_membership.get(cid) or section_membership.get(f"#{cid}") or ''
+            profiles = ' '.join(_safe_str(p) for p in ((cond.get('meta') or {}).get('profile') or [])).lower()
+            is_antecedente_patologico = (
+                'conditionstatementrda' in profiles
+                or 'antecedente' in sec_title.lower()
+                or 'history' in sec_title.lower()
+                or 'problem' in sec_title.lower()
+            )
+
             diag_role = encounter_diag_roles.get(cid)
             if not diag_role:
-                if 'antecedente' in sec_title.lower() or 'history' in sec_title.lower() or 'problem' in sec_title.lower():
-                    diag_role = f"Antecedente Patológico ({sec_title})"
+                if is_antecedente_patologico:
+                    diag_role = f"Antecedente Patológico ({sec_title})" if sec_title else "Antecedente Patológico"
                 else:
                     diag_role = sec_title or (f"Diagnóstico Principal" if idx == 0 else f"Diagnóstico #{idx + 1}")
+
+            # Extraer Descripción de la condición (code.text o note[].text)
+            code_free_text = _safe_str(code_obj.get('text')) if isinstance(code_obj, dict) else ''
+            if code_free_text and sent_display and code_free_text.strip().lower() == sent_display.strip().lower():
+                code_free_text = ''
+            notes_list = [_safe_str(n.get('text')) for n in (cond.get('note') or []) if isinstance(n, dict) and n.get('text')]
+            cond_description = ' | '.join([p for p in ([code_free_text] + notes_list) if p])
 
             # Validar CIE-10 contra la BD de API_SM
             catalog_check = None
@@ -1083,7 +1187,7 @@ class FhirBundleInspectorService:
                 db_cie = cie10_map.get(cie_code)
                 is_valid = db_cie is not None
                 catalog_check = {
-                    'catalog': 'CIE-10 (Diagnósticos)',
+                    'catalog': 'CIE-10 (Antecedente Patológico)' if is_antecedente_patologico else 'CIE-10 (Diagnósticos)',
                     'code': cie_code,
                     'sent_name': sent_display,
                     'valid': is_valid,
@@ -1092,29 +1196,31 @@ class FhirBundleInspectorService:
                 }
                 catalog_validation_items.append(catalog_check)
 
-            notes = '; '.join(_safe_str(n.get('text')) for n in (cond.get('note') or []) if isinstance(n, dict) and n.get('text'))
+            diag_formatted = f"{cie_code} - {sent_display}" if cie_code and sent_display else (cie_code or sent_display or 'No enviado')
 
             explanation = (
-                f"**{diag_role}:** Código CIE-10 **{cie_code or 'SIN CÓDIGO'}** — *{sent_display or 'Sin descripción'}* "
-                f"(Estado: **{clin_status}**, Certeza: **{verif_status}**)."
+                f"**{diag_role}:** Diagnóstico **{diag_formatted}** "
+                f"(Estado de la condición / verificación: **{verif_status}**"
+                + (f", Estado clínico: **{clin_status}**" if clin_status_code else "")
+                + (f", Descripción: *{cond_description}*" if cond_description else "")
+                + ")."
             )
             narratives.append(explanation)
 
             items.append({
                 'title': f"{cie_code} — {sent_display}" if cie_code else (sent_display or f"Condición #{idx + 1}"),
-                'subtitle': diag_role,
-                'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else ('CIE-10 No Encontrado' if catalog_check else clin_status),
+                'subtitle': f"{diag_role} • Estado de la condición: {verif_status}",
+                'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else ('CIE-10 No Encontrado' if catalog_check else verif_status),
                 'badge_type': 'success' if (catalog_check and catalog_check['valid']) else ('danger' if catalog_check else 'secondary'),
                 'explanation': explanation,
                 'catalog_check': catalog_check,
                 'fields': [
                     {'label': 'Clasificación / Módulo', 'value': diag_role},
-                    {'label': 'Código CIE-10 Enviado', 'value': cie_code or 'No enviado'},
-                    {'label': 'Nombre Enviado en el JSON', 'value': sent_display or 'No enviado'},
+                    {'label': 'Estado de la condición (Verificación)', 'value': verif_status},
+                    {'label': 'Estado clínico', 'value': clin_status},
+                    {'label': 'Diagnóstico (CIE-10)', 'value': diag_formatted},
+                    {'label': 'Descripción de la condición / Notas', 'value': cond_description or 'Sin descripción adicional en el JSON'},
                     {'label': 'Nombre Oficial en Base de Datos (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'Sin código para validar'},
-                    {'label': 'Tipo / Certeza del Diagnóstico', 'value': verif_status},
-                    {'label': 'Estado Clínico', 'value': clin_status},
-                    {'label': 'Observaciones / Notas', 'value': notes or 'Sin notas adicionales'},
                 ],
                 'raw_resource': cond,
             })
@@ -1125,7 +1231,7 @@ class FhirBundleInspectorService:
             'fa_icon': 'fas fa-stethoscope',
             'color': 'success',
             'count': len(items),
-            'narrative': ' '.join(narratives) if narratives else 'No se registraron diagnósticos ni condiciones (Condition) en este Bundle.',
+            'narrative': ' '.join(narratives) if narratives else 'No se registraron diagnósticos ni antecedentes patológicos (Condition) en este Bundle.',
             'items': items,
         }
 
@@ -1224,26 +1330,45 @@ class FhirBundleInspectorService:
         # 2. Antecedentes Farmacológicos (MedicationStatement)
         for idx, mstat in enumerate(med_statements):
             med_info = cls._extract_medication_identity(mstat, resource_index)
+            status_raw = _safe_str(mstat.get('status')).lower()
+            status_label = MED_STATEMENT_STATUS_MAP.get(status_raw, status_raw or 'Activo')
+
             dosages = mstat.get('dosage') or []
             d0 = dosages[0] if (isinstance(dosages, list) and dosages and isinstance(dosages[0], dict)) else {}
-            dosage_text = _safe_str(d0.get('text')) or _extract_coding_info(d0.get('route'))['text'] or 'Uso reportado en antecedentes'
+            notes_text = '; '.join(_safe_str(n.get('text')) for n in (mstat.get('note') or []) if isinstance(n, dict) and n.get('text'))
+            dosage_text = (
+                _safe_str(d0.get('text'))
+                or _safe_str(d0.get('patientInstruction'))
+                or _extract_coding_info(d0.get('route'))['text']
+                or notes_text
+            )
+            eff_date = _safe_str(mstat.get('effectiveDateTime') or (mstat.get('effectivePeriod') or {}).get('start'))
+
             explanation = (
-                f"**Antecedente Farmacológico (Medicamento que consume el paciente):** **{med_info['name']}** "
-                f"({med_info['codes_label']}) — {dosage_text}."
+                f"**Antecedente Farmacológico:** Medicamento **{med_info['display_with_code']}** — "
+                f"Estado de la declaración del medicamento: **{status_label}**"
+                + (f", Dosificación: **{dosage_text}**" if dosage_text else ", Dosificación: *No incluida en el JSON*")
+                + "."
             )
             narratives.append(explanation)
+
+            fields = [
+                {'label': 'Tipo de Registro', 'value': 'Antecedente Farmacológico (MedicationStatement)'},
+                {'label': 'Estado de la declaración del medicamento', 'value': status_label},
+                {'label': 'Medicamento', 'value': med_info['display_with_code']},
+                {'label': 'Dosificación', 'value': dosage_text or 'No incluida en el JSON exportado'},
+                {'label': 'Código(s) (DCI / CUM / IUM)', 'value': med_info['codes_label']},
+            ]
+            if eff_date:
+                fields.append({'label': 'Fecha / Período de Uso', 'value': eff_date})
+
             items.append({
-                'title': f"📋 Antecedente Farmacológico: {med_info['name']}",
-                'subtitle': med_info['codes_label'],
-                'badge': 'Antecedente (MedicationStatement)',
+                'title': f"📋 Antecedente Farmacológico: {med_info['display_with_code']}",
+                'subtitle': f"Estado de la declaración: {status_label}" + (f" • Dosificación: {dosage_text}" if dosage_text else ""),
+                'badge': f"Estado: {status_label}",
                 'badge_type': 'info',
                 'explanation': explanation,
-                'fields': [
-                    {'label': 'Tipo de Registro', 'value': 'Antecedente Farmacológico (MedicationStatement)'},
-                    {'label': 'Medicamento', 'value': med_info['name']},
-                    {'label': 'Código(s) (CUM / IUM / DCI)', 'value': med_info['codes_label']},
-                    {'label': 'Posología / Detalle', 'value': dosage_text},
-                ],
+                'fields': fields,
                 'raw_resource': mstat,
             })
 
@@ -1303,7 +1428,7 @@ class FhirBundleInspectorService:
         concept_text = _safe_str((concept or {}).get('text'))
         if not codings:
             txt = concept_text or 'Medicamento sin descripción'
-            return {'name': txt, 'codes_label': 'Sin código CUM/IUM/DCI'}
+            return {'name': txt, 'display_with_code': txt, 'codes_label': 'Sin código CUM/IUM/DCI'}
 
         names = [c['display'] for c in codings if c['display']]
         codes_formatted = []
@@ -1314,15 +1439,23 @@ class FhirBundleInspectorService:
                 tag = 'IUM'
             elif 'cum' in sys_l or 'invima' in sys_l:
                 tag = 'CUM'
-            elif 'atc' in sys_l or 'dci' in sys_l:
-                tag = 'DCI/ATC'
+            elif 'atc' in sys_l or 'dci' in sys_l or 'mipresinn' in sys_l or 'inn' in sys_l:
+                tag = 'DCI (MipresINN)' if 'mipresinn' in sys_l else 'DCI/ATC'
             codes_formatted.append(f"{tag}: {c['code']}" + (f" ({c['display']})" if c['display'] else ''))
 
         primary_name = names[0] if names else codings[0]['code']
+        first_code = codings[0]['code']
+        display_with_code = (
+            f"{first_code} - {primary_name}"
+            if first_code and primary_name and first_code not in primary_name
+            else primary_name
+        )
         if concept_text and concept_text.lower() not in primary_name.lower():
             primary_name = f"{primary_name} ({concept_text})"
+            display_with_code = f"{display_with_code} ({concept_text})"
         return {
             'name': primary_name,
+            'display_with_code': display_with_code,
             'codes_label': ' | '.join(codes_formatted),
         }
 
@@ -1456,36 +1589,89 @@ class FhirBundleInspectorService:
         items = []
         narratives = []
 
-        # Alergias
+        # 1. Antecedentes alérgicos o de intolerancia (AllergyIntolerance)
         for alg in allergies:
-            code_info = _extract_coding_info(alg.get('code'))
-            clin_status = _extract_coding_info(alg.get('clinicalStatus'))['text'] or 'Activa'
-            categories = ', '.join(_safe_str(c) for c in (alg.get('category') or []) if c) or 'Alergia / Intolerancia'
-            explanation = f"**Alergia / Intolerancia:** Sustancia o agente **{code_info['text'] or 'No especificado'}** (Categoría: {categories}, Estado: {clin_status})."
+            code_obj = alg.get('code') or {}
+            code_info = _extract_coding_info(code_obj)
+            allergen_text = _safe_str(code_obj.get('text')) if isinstance(code_obj, dict) else ''
+            notes_str = '; '.join(_safe_str(n.get('text')) for n in (alg.get('note') or []) if isinstance(n, dict) and n.get('text'))
+
+            # Determinar Tipo de alergia y Nombre del alergeno exactamente como en el software
+            raw_cats = [_safe_str(c).lower() for c in (alg.get('category') or []) if c]
+            cat_translated = ', '.join(ALLERGY_CATEGORY_MAP.get(c, c) for c in raw_cats)
+
+            if 'tipoalergia' in code_info['system'].lower() or code_info['code'] in ('01', '02', '03', '04', '05'):
+                allergy_type = code_info['text'] or cat_translated or 'No especificado'
+                allergen_name = allergen_text or notes_str or code_info['display'] or 'No especificado'
+            else:
+                allergy_type = cat_translated or 'Alergia / Intolerancia'
+                allergen_name = allergen_text or code_info['text'] or notes_str or 'No especificado'
+
+            clin_code = _extract_coding_info(alg.get('clinicalStatus'))['code'].lower()
+            clin_status = CLINICAL_STATUS_MAP.get(
+                clin_code,
+                _extract_coding_info(alg.get('clinicalStatus'))['text'] or 'Activo',
+            )
+
+            verif_code = _extract_coding_info(alg.get('verificationStatus'))['code'].lower()
+            verif_status = VERIFICATION_STATUS_MAP.get(
+                verif_code,
+                _extract_coding_info(alg.get('verificationStatus'))['text'] or 'No especificado',
+            )
+
+            onset_date = _safe_str(alg.get('onsetDateTime') or alg.get('recordedDate'))
+
+            explanation = (
+                f"**Antecedente Alérgico o de Intolerancia:** Nombre del alergeno: **{allergen_name}** — "
+                f"Tipo de alergia: **{allergy_type}**, Estado clínico: **{clin_status}**, "
+                f"Estado de verificación: **{verif_status}**."
+            )
             narratives.append(explanation)
+
+            alg_fields = [
+                {'label': 'Estado clínico', 'value': clin_status},
+                {'label': 'Estado de verificación', 'value': verif_status},
+                {'label': 'Tipo de alergia', 'value': allergy_type},
+                {'label': 'Nombre del alergeno', 'value': allergen_name},
+            ]
+            if onset_date:
+                alg_fields.append({'label': 'Fecha de Inicio / Registro', 'value': onset_date})
+            if notes_str and notes_str != allergen_name:
+                alg_fields.append({'label': 'Notas / Observaciones', 'value': notes_str})
+
             items.append({
-                'title': f"⚠️ Alergia: {code_info['text'] or 'Sustancia no especificada'}",
-                'subtitle': 'Alergia o Intolerancia del Paciente (AllergyIntolerance)',
-                'badge': 'Alergia',
-                'badge_type': 'danger',
+                'title': f"⚠️ Alergia/Intolerancia: {allergen_name} ({allergy_type})",
+                'subtitle': f"Estado clínico: {clin_status} • Estado de verificación: {verif_status}",
+                'badge': f"{clin_status} / {verif_status}",
+                'badge_type': 'danger' if clin_code == 'active' else 'warning',
                 'explanation': explanation,
-                'fields': [
-                    {'label': 'Sustancia / Alérgeno', 'value': code_info['text'] or 'No especificado'},
-                    {'label': 'Categoría / Tipo', 'value': categories},
-                    {'label': 'Estado Clínico', 'value': clin_status},
-                ],
+                'fields': alg_fields,
                 'raw_resource': alg,
             })
 
-        # Antecedentes Familiares
+        # 2. Antecedentes Familiares (FamilyMemberHistory)
         for fam in family_histories:
+            fam_status_raw = _safe_str(fam.get('status')).lower()
+            fam_status = FAMILY_HISTORY_STATUS_MAP.get(fam_status_raw, fam_status_raw or 'Registrado')
             rel_info = _extract_coding_info(fam.get('relationship'))
+            parentesco_label = rel_info['text'] or 'No especificado'
+            fam_notes = '; '.join(_safe_str(n.get('text')) for n in (fam.get('note') or []) if isinstance(n, dict) and n.get('text'))
+
             for cond in fam.get('condition') or []:
                 if not isinstance(cond, dict):
                     continue
-                c_info = _extract_coding_info(cond.get('code'))
+                cond_code_obj = cond.get('code') or {}
+                c_info = _extract_coding_info(cond_code_obj)
                 cie_code = c_info['code'].upper()
                 sent_name = c_info['display'] or c_info['text']
+
+                # Descripción digitada en el software (viene en condition[].code.text o condition[].note[].text)
+                cond_text = _safe_str(cond_code_obj.get('text')) if isinstance(cond_code_obj, dict) else ''
+                if cond_text and sent_name and cond_text.strip().lower() == sent_name.strip().lower():
+                    cond_text = ''
+                cond_notes = '; '.join(_safe_str(n.get('text')) for n in (cond.get('note') or []) if isinstance(n, dict) and n.get('text'))
+                descripcion_familiar = ' | '.join([p for p in [cond_text, cond_notes, fam_notes] if p])
+
                 catalog_check = None
                 if cie_code:
                     db_cie = cie10_map.get(cie_code)
@@ -1499,24 +1685,31 @@ class FhirBundleInspectorService:
                     }
                     catalog_validation_items.append(catalog_check)
 
-                explanation = f"**Antecedente Familiar ({rel_info['text'] or 'Familiar'}):** {cie_code} — *{sent_name}*."
+                diag_label = f"{cie_code} - {sent_name}" if cie_code and sent_name else (cie_code or sent_name or 'No especificado')
+                explanation = (
+                    f"**Antecedente Familiar ({parentesco_label}):** Estado: **{fam_status}**, "
+                    f"Diagnóstico: **{diag_label}**"
+                    + (f", Descripción: *{descripcion_familiar}*." if descripcion_familiar else ".")
+                )
                 narratives.append(explanation)
                 items.append({
-                    'title': f"👪 Familiar ({rel_info['text'] or 'Parentesco'}): {cie_code} — {sent_name}",
-                    'subtitle': 'Antecedente Familiar (FamilyMemberHistory)',
-                    'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else 'Antecedente Familiar',
+                    'title': f"👪 Antecedente Familiar ({parentesco_label}): {diag_label}",
+                    'subtitle': f"Estado del antecedente familiar: {fam_status}" + (f" • Descripción: {descripcion_familiar}" if descripcion_familiar else ""),
+                    'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else f"Estado: {fam_status}",
                     'badge_type': 'success' if (catalog_check and catalog_check['valid']) else 'info',
                     'explanation': explanation,
                     'catalog_check': catalog_check,
                     'fields': [
-                        {'label': 'Parentesco Familiar', 'value': rel_info['text'] or 'No especificado'},
-                        {'label': 'Diagnóstico CIE-10', 'value': f"{cie_code} - {sent_name}"},
+                        {'label': 'Estado del antecedente familiar', 'value': fam_status},
+                        {'label': 'Parentesco', 'value': parentesco_label},
+                        {'label': 'Diagnóstico (CIE-10)', 'value': diag_label},
+                        {'label': 'Descripción', 'value': descripcion_familiar or 'Sin descripción adicional'},
                         {'label': 'Nombre Oficial en BD (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'N/A'},
                     ],
                     'raw_resource': fam,
                 })
 
-        # Observaciones / Signos Vitales / Antropometría
+        # 3. Observaciones / Signos Vitales / Antropometría
         for obs in observations:
             code_info = _extract_coding_info(obs.get('code'))
             val_str = ''
@@ -1544,33 +1737,63 @@ class FhirBundleInspectorService:
                 'raw_resource': obs,
             })
 
-        # Factores de Riesgo y Documentos Adjuntos (Incapacidad, etc.)
+        # 4. Factores de Riesgo (RiskAssessment) y Documentos Adjuntos (DocumentReference)
         for rsk in risks:
+            rsk_status_raw = _safe_str(rsk.get('status')).lower()
+            rsk_status = RISK_STATUS_MAP.get(rsk_status_raw, rsk_status_raw or 'Registrado')
             pred = (rsk.get('prediction') or [{}])[0]
-            outcome = _extract_coding_info(pred.get('outcome'))['text'] or _extract_coding_info(rsk.get('code'))['text'] or 'Factor de riesgo evaluado'
-            explanation = f"**Factor de Riesgo (RiskAssessment):** {outcome}."
+            code_obj = rsk.get('code') or {}
+            outcome = _extract_coding_info(pred.get('outcome'))['text'] or _extract_coding_info(code_obj)['text'] or 'Factor de riesgo evaluado'
+            rsk_desc = (
+                (_safe_str(code_obj.get('text')) if isinstance(code_obj, dict) else '')
+                or '; '.join(_safe_str(n.get('text')) for n in (rsk.get('note') or []) if isinstance(n, dict) and n.get('text'))
+            )
+            rsk_date = _safe_str(rsk.get('occurrenceDateTime') or (rsk.get('occurrencePeriod') or {}).get('start'))
+
+            explanation = (
+                f"**Factor de Riesgo (RiskAssessment):** **{outcome}** "
+                f"(Estado: **{rsk_status}**"
+                + (f", Descripción: *{rsk_desc}*" if rsk_desc else "")
+                + (f", Fecha inicio: **{rsk_date}**" if rsk_date else "")
+                + ")."
+            )
             narratives.append(explanation)
+            rsk_fields = [
+                {'label': 'Estado del Factor de Riesgo', 'value': rsk_status},
+                {'label': 'Código / Factor de Riesgo', 'value': outcome},
+                {'label': 'Descripción', 'value': rsk_desc or 'Sin descripción adicional'},
+            ]
+            if rsk_date:
+                rsk_fields.append({'label': 'Fecha de Inicio', 'value': rsk_date})
+
             items.append({
                 'title': f"🛡️ Factor de Riesgo: {outcome}",
-                'subtitle': 'Evaluación de Riesgo (RiskAssessment)',
-                'badge': 'Factor de Riesgo',
+                'subtitle': f"Estado: {rsk_status}" + (f" • Descripción: {rsk_desc}" if rsk_desc else ""),
+                'badge': f"Riesgo ({rsk_status})",
                 'badge_type': 'warning',
                 'explanation': explanation,
-                'fields': [{'label': 'Riesgo Evaluado', 'value': outcome}],
+                'fields': rsk_fields,
                 'raw_resource': rsk,
             })
 
         for doc in documents:
             doc_type = _extract_coding_info(doc.get('type'))['text'] or _safe_str(doc.get('description')) or 'Documento Clínico / Incapacidad'
-            explanation = f"**Documento Adjunto / Soporte (DocumentReference):** {doc_type}."
+            doc_desc = _safe_str(doc.get('description'))
+            doc_date = _safe_str(doc.get('date'))
+            explanation = f"**Documento Adjunto / Soporte (DocumentReference):** {doc_type}" + (f" — {doc_desc}." if doc_desc else ".")
             narratives.append(explanation)
+            doc_fields = [{'label': 'Tipo de Documento', 'value': doc_type}]
+            if doc_desc:
+                doc_fields.append({'label': 'Descripción', 'value': doc_desc})
+            if doc_date:
+                doc_fields.append({'label': 'Fecha del Documento', 'value': doc_date})
             items.append({
                 'title': f"📎 Documento / Soporte: {doc_type}",
-                'subtitle': 'Referencia Documental (DocumentReference)',
+                'subtitle': doc_desc or 'Referencia Documental (DocumentReference)',
                 'badge': 'Documento',
                 'badge_type': 'info',
                 'explanation': explanation,
-                'fields': [{'label': 'Tipo de Documento', 'value': doc_type}],
+                'fields': doc_fields,
                 'raw_resource': doc,
             })
 
