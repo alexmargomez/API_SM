@@ -1,15 +1,23 @@
+import csv
+import io
+import re
 from datetime import datetime
-import pandas as pd
+from django.db import transaction
 from api.models import Eps, Cie10, Cups
 
 
 class CatalogImporterService:
     """
-    Servicio ETL encargado de procesar archivos .xlsx y .csv para actualizar
+    Servicio ETL transaccional encargado de procesar archivos .xlsx y .csv para actualizar
     los catálogos maestros de Entidades (EPS), AFP, CIE10 y CUPS.
+    Incluye:
+      - Streaming nativo CSV sin sobrecarga de Pandas en memoria.
+      - Lazy-loading de Pandas/OpenPyXL exclusivamente cuando se suben archivos .xlsx.
+      - Transaccionalidad atómica (transaction.atomic) para evitar pérdida de catálogos ante fallos parciales.
     """
 
     ALLOWED_EXTENSIONS = ('.xlsx', '.csv')
+    HEADER_TOKENS = {'codigo', 'código', 'code', 'nombre', 'descripcion', 'descripción'}
 
     @classmethod
     def process_upload(cls, upload_type: str, uploaded_file) -> dict:
@@ -68,6 +76,43 @@ class CatalogImporterService:
         )
 
     @classmethod
+    def _extract_records(cls, uploaded_file, is_csv: bool, columns_map: dict) -> list:
+        records = []
+        if is_csv:
+            raw_bytes = uploaded_file.read()
+            text_content = raw_bytes.decode('utf-8-sig', errors='replace')
+            reader = csv.reader(io.StringIO(text_content), delimiter=';')
+            for row_idx, row in enumerate(reader):
+                if not row:
+                    continue
+                if row_idx == 0 and row[0].strip().lower() in cls.HEADER_TOKENS:
+                    continue
+                item = {}
+                for model_field, col_spec in columns_map.items():
+                    if isinstance(col_spec, int):
+                        item[model_field] = row[col_spec].strip() if col_spec < len(row) else ''
+                    else:
+                        item[model_field] = ''
+                records.append(item)
+            return records
+
+        # Lazy import de pandas solo para archivos Excel (.xlsx)
+        import pandas as pd
+
+        df = pd.read_excel(uploaded_file, dtype=str)
+        df.fillna('', inplace=True)
+
+        for _, row in df.iterrows():
+            item = {}
+            for model_field, excel_col in columns_map.items():
+                if isinstance(excel_col, int):
+                    item[model_field] = str(row.iloc[excel_col]).strip() if excel_col < len(df.columns) else ''
+                else:
+                    item[model_field] = str(row[excel_col]).strip() if excel_col in df.columns else ''
+            records.append(item)
+        return records
+
+    @classmethod
     def _execute_etl(
         cls,
         uploaded_file,
@@ -77,77 +122,50 @@ class CatalogImporterService:
         upload_type: str,
         hardcoded_fields: dict = None,
     ) -> dict:
-        if is_csv:
-            df = pd.read_csv(uploaded_file, sep=';', header=None, dtype=str)
-        else:
-            df = pd.read_excel(uploaded_file, dtype=str)
-
-        df.fillna('', inplace=True)
-
-        extracted_data = {}
-        for model_field, excel_col in columns_map.items():
-            if isinstance(excel_col, int):
-                if excel_col < len(df.columns):
-                    extracted_data[model_field] = df.iloc[:, excel_col]
-                else:
-                    extracted_data[model_field] = ''
-            else:
-                if excel_col in df.columns:
-                    extracted_data[model_field] = df[excel_col]
-                else:
-                    extracted_data[model_field] = ''
-
-        df_clean = pd.DataFrame(extracted_data)
-
-        if hardcoded_fields:
-            for h_field, h_value in hardcoded_fields.items():
-                df_clean[h_field] = h_value
-
-        # Limpieza específica para EPS (remueve prefijos numéricos como "1. CONTRIBUTIVO")
-        if model == Eps and 'regimen' in df_clean.columns:
-            df_clean['regimen'] = (
-                df_clean['regimen']
-                .astype(str)
-                .str.replace(r'^\d+\.\s*', '', regex=True)
-            )
-
-        # Limpieza previa del catálogo correspondiente
-        if model == Eps:
-            if upload_type == 'afp':
-                model.objects.filter(regimen='AFP').delete()
-            else:
-                model.objects.exclude(regimen='AFP').delete()
-        else:
-            model.objects.all().delete()
-
-        # Remover duplicados por la primera columna (código)
+        raw_records = cls._extract_records(uploaded_file, is_csv, columns_map)
         first_field = list(columns_map.keys())[0]
-        df_clean = df_clean.drop_duplicates(subset=[first_field])
-
+        seen_keys = set()
         batch = []
         current_year = str(datetime.now().year)
         current_date = datetime.now().strftime('%Y-%m-%d')
 
-        for row in df_clean.to_dict('records'):
-            obj_data = {}
-            for field in df_clean.columns:
-                val = str(row.get(field, '')).strip() if field in row else ''
-                if val.lower() == 'nan':
-                    val = ''
-                if field in ['codigo', 'version', 'version_fecha'] and val:
-                    val = val[:50]
-                obj_data[field] = val
+        for row in raw_records:
+            obj_data = dict(row)
+            if hardcoded_fields:
+                obj_data.update(hardcoded_fields)
+
+            if model == Eps and 'regimen' in obj_data:
+                obj_data['regimen'] = re.sub(r'^\d+\.\s*', '', str(obj_data.get('regimen', '')).strip())
+
+            for field, val in list(obj_data.items()):
+                clean_val = str(val or '').strip()
+                if clean_val.lower() == 'nan':
+                    clean_val = ''
+                if field in ['codigo', 'version', 'version_fecha'] and clean_val:
+                    clean_val = clean_val[:50]
+                obj_data[field] = clean_val
+
+            primary_code = obj_data.get(first_field, '')
+            if not primary_code or primary_code in seen_keys:
+                continue
+            seen_keys.add(primary_code)
 
             if model in [Cie10, Cups]:
                 obj_data['version'] = current_year
                 obj_data['version_fecha'] = current_date
 
-            if not obj_data.get(first_field):
-                continue
-
             batch.append(model(**obj_data))
 
-        model.objects.bulk_create(batch, batch_size=1000)
+        with transaction.atomic():
+            if model == Eps:
+                if upload_type == 'afp':
+                    model.objects.filter(regimen='AFP').delete()
+                else:
+                    model.objects.exclude(regimen='AFP').delete()
+            else:
+                model.objects.all().delete()
+
+            model.objects.bulk_create(batch, batch_size=1000)
 
         updated_count = len(batch)
         return {

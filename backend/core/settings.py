@@ -62,17 +62,27 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 
 # Database
+import sys
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.environ.get('DB_NAME', os.environ.get('MARIADB_DATABASE', 'api_sm_db')),
-        'USER': os.environ.get('DB_USER', os.environ.get('MARIADB_USER', 'api_user')),
-        'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('MARIADB_PASSWORD', 'api_password')),
-        'HOST': os.environ.get('DB_HOST', 'db'),
-        'PORT': os.environ.get('DB_PORT', '3306'),
+if 'test' in sys.argv or os.environ.get('DB_ENGINE') == 'sqlite3':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': os.environ.get('DB_NAME', os.environ.get('MARIADB_DATABASE', 'api_sm_db')),
+            'USER': os.environ.get('DB_USER', os.environ.get('MARIADB_USER', 'api_user')),
+            'PASSWORD': os.environ.get('DB_PASSWORD', os.environ.get('MARIADB_PASSWORD', 'api_password')),
+            'HOST': os.environ.get('DB_HOST', 'db'),
+            'PORT': os.environ.get('DB_PORT', '3306'),
+        }
+    }
+
 
 
 # Django REST Framework
