@@ -149,6 +149,17 @@ class ApiSmArchitectureAndDomainTests(TestCase):
         self.assertEqual(wipe_res.status_code, 400)
         self.assertEqual(Eps.objects.count(), 3)
 
+        # CSV separado por comas cuyo encabezado contiene ';' dentro de comillas no debe confundir al detector
+        quoted_csv = (
+            b'Codigo,"Nombre; Razon Social",NIT,Regimen\n'
+            b'EPS037,"NUEVA EPS; S.A.",900156264,CONTRIBUTIVO\n'
+        )
+        uploaded_quoted = SimpleUploadedFile('quoted_eps.csv', quoted_csv, content_type='text/csv')
+        quoted_res = self.client.post('/api/panel/import/', {'type': 'entidades', 'file': uploaded_quoted}, format='multipart')
+        self.assertEqual(quoted_res.status_code, 200)
+        self.assertEqual(Eps.objects.count(), 1)
+        self.assertEqual(Eps.objects.first().codigo, 'EPS037')
+
     def test_fhir_res_1888_bundle_inspector_sample_and_validation(self):
         # 1. GET devuelve el Bundle de ejemplo Res. 1888 inspeccionado
         res_get = self.client.get('/api/tools/fhir-inspector/')

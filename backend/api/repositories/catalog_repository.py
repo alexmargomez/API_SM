@@ -117,3 +117,43 @@ class CatalogRepository:
                 condition = condition | Q(version__icontains=q) | Q(version_fecha__icontains=q)
             qs = qs.filter(condition)
         return qs
+
+    @classmethod
+    def resolve_catalog_codes_map(
+        cls,
+        cie10_codes: set,
+        cups_codes: set,
+        eps_codes: set,
+    ) -> Dict[str, Dict[str, Dict[str, str]]]:
+        """Resuelve en lote los códigos CIE-10, CUPS y EPS presentes en un Bundle FHIR sin exponer el ORM a los servicios."""
+        cie10_map: Dict[str, Dict[str, str]] = {}
+        cups_map: Dict[str, Dict[str, str]] = {}
+        eps_map: Dict[str, Dict[str, str]] = {}
+
+        if cie10_codes:
+            for obj in Cie10.objects.filter(codigo__in=list(cie10_codes)):
+                cie10_map[obj.codigo.strip().upper()] = {
+                    'codigo': obj.codigo,
+                    'descripcion': obj.descripcion,
+                    'version': obj.version or '',
+                }
+
+        if cups_codes:
+            for obj in Cups.objects.filter(codigo__in=list(cups_codes)):
+                cups_map[obj.codigo.strip().upper()] = {
+                    'codigo': obj.codigo,
+                    'descripcion': obj.descripcion,
+                    'version': obj.version or '',
+                }
+
+        if eps_codes:
+            for obj in Eps.objects.filter(codigo__in=list(eps_codes)):
+                eps_map[obj.codigo.strip().upper()] = {
+                    'codigo': obj.codigo,
+                    'nombre': obj.nombre,
+                    'nit': obj.nit or '',
+                    'regimen': obj.regimen or '',
+                }
+
+        return {'cie10': cie10_map, 'cups': cups_map, 'eps': eps_map}
+

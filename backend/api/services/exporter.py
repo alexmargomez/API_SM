@@ -42,6 +42,7 @@ class CatalogExporterService:
         writer = csv.writer(pseudo_buffer, delimiter=';')
 
         def row_generator():
+            yield '\ufeff'
             if write_header:
                 yield writer.writerow(fields)
             for obj in model.objects.all().order_by('id').iterator(chunk_size=1000):

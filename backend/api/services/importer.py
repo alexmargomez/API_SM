@@ -102,10 +102,18 @@ class CatalogImporterService:
 
     @classmethod
     def _detect_csv_delimiter(cls, sample_line: str) -> str:
-        for candidate in (';', ',', '\t', '|'):
-            if candidate in sample_line:
-                return candidate
-        return ';'
+        # Eliminar texto dentro de comillas dobles para que '; ' o ', ' dentro de un campo no engañe al detector
+        unquoted = re.sub(r'"[^"]*"', '', sample_line or '')
+        candidates = (';', ',', '\t', '|')
+        counts = {d: unquoted.count(d) for d in candidates}
+        best_delim = max(candidates, key=lambda d: counts[d])
+        if counts[best_delim] > 0:
+            return best_delim
+        try:
+            dialect = csv.Sniffer().sniff(sample_line, delimiters=';,\t|')
+            return dialect.delimiter
+        except Exception:
+            return ';'
 
     @classmethod
     def _resolve_csv_column_indices(cls, header_row: list, columns_map: dict) -> dict:
