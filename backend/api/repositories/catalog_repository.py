@@ -1,10 +1,11 @@
 """
-Repositorio de Acceso a Datos y Caché en Memoria para Catálogos Normativos SISPRO (EPS, CIE-10, CUPS).
-Aísla el ORM de Django de la capa de servicios y controladores HTTP.
+Repositorio de Acceso a Datos y Caché Unificada para Catálogos Normativos SISPRO (EPS, CIE-10, CUPS).
+Aísla el ORM de Django y la paginación de la capa de servicios y controladores HTTP.
 """
 
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List
+from django.core.cache import cache
+from django.core.paginator import Paginator
 from django.db.models import Q, QuerySet
 from ..models import Eps, Cie10, Cups
 
@@ -12,10 +13,10 @@ from ..models import Eps, Cie10, Cups
 class CatalogRepository:
     DEFAULT_LIMIT = 100
     MAX_LIMIT = 500
-    CACHE_TTL_SECONDS = 60.0
+    CACHE_TTL_SECONDS = 60
 
-    _stats_cache: Optional[Tuple[float, Dict[str, int]]] = None
-    _regimenes_cache: Optional[Tuple[float, List[str]]] = None
+    STATS_CACHE_KEY = 'api_sm:catalog:counts'
+    REGIMENES_CACHE_KEY = 'api_sm:catalog:regimenes'
 
     @classmethod
     def sanitize_limit(cls, raw_limit, default: int = DEFAULT_LIMIT) -> int:
@@ -27,28 +28,27 @@ class CatalogRepository:
 
     @classmethod
     def invalidate_cache(cls) -> None:
-        cls._stats_cache = None
-        cls._regimenes_cache = None
+        cache.delete_many([cls.STATS_CACHE_KEY, cls.REGIMENES_CACHE_KEY])
 
     @classmethod
     def get_counts(cls) -> Dict[str, int]:
-        now = time.monotonic()
-        if cls._stats_cache is not None and (now - cls._stats_cache[0]) < cls.CACHE_TTL_SECONDS:
-            return dict(cls._stats_cache[1])
+        cached = cache.get(cls.STATS_CACHE_KEY)
+        if cached is not None:
+            return dict(cached)
 
         counts = {
             'count_entidades': Eps.objects.count(),
             'count_cie10': Cie10.objects.count(),
             'count_cups': Cups.objects.count(),
         }
-        cls._stats_cache = (now, counts)
+        cache.set(cls.STATS_CACHE_KEY, counts, timeout=cls.CACHE_TTL_SECONDS)
         return dict(counts)
 
     @classmethod
     def get_distinct_regimenes(cls) -> List[str]:
-        now = time.monotonic()
-        if cls._regimenes_cache is not None and (now - cls._regimenes_cache[0]) < cls.CACHE_TTL_SECONDS:
-            return list(cls._regimenes_cache[1])
+        cached = cache.get(cls.REGIMENES_CACHE_KEY)
+        if cached is not None:
+            return list(cached)
 
         qs = (
             Eps.objects.values_list('regimen', flat=True)
@@ -56,8 +56,23 @@ class CatalogRepository:
             .order_by('regimen')
         )
         regimenes = [r for r in qs if r]
-        cls._regimenes_cache = (now, regimenes)
+        cache.set(cls.REGIMENES_CACHE_KEY, regimenes, timeout=cls.CACHE_TTL_SECONDS)
         return list(regimenes)
+
+    @classmethod
+    def paginate_queryset(cls, queryset: QuerySet, page_number: Any = 1, per_page: int = 50) -> Dict[str, Any]:
+        paginator = Paginator(queryset, per_page)
+        page_obj = paginator.get_page(page_number)
+        return {
+            'items': list(page_obj.object_list),
+            'total': paginator.count,
+            'page': page_obj.number,
+            'num_pages': paginator.num_pages,
+            'has_previous': page_obj.has_previous(),
+            'has_next': page_obj.has_next(),
+            'previous_page': page_obj.previous_page_number() if page_obj.has_previous() else None,
+            'next_page': page_obj.next_page_number() if page_obj.has_next() else None,
+        }
 
     @classmethod
     def build_eps_queryset(cls, query_text: str = '', regimen: str = '', ordered: bool = False) -> QuerySet:

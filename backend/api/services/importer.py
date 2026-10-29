@@ -11,18 +11,43 @@ class CatalogImporterService:
     Servicio ETL transaccional encargado de procesar archivos .xlsx y .csv para actualizar
     los catálogos maestros de Entidades (EPS), AFP, CIE10 y CUPS.
     Incluye:
-      - Streaming nativo CSV sin sobrecarga de Pandas en memoria.
+      - Streaming CSV con autodetección de delimitador (; , \t) y resolución dual de columnas (por nombre de encabezado o índice posicional).
+      - Guardrail Anti-Borrado (Zero-Wipe Protection): aborta antes de iniciar la transacción si el archivo produce 0 registros válidos.
       - Lazy-loading de Pandas/OpenPyXL exclusivamente cuando se suben archivos .xlsx.
       - Transaccionalidad atómica (transaction.atomic) para evitar pérdida de catálogos ante fallos parciales.
     """
 
     ALLOWED_EXTENSIONS = ('.xlsx', '.csv')
-    HEADER_TOKENS = {'codigo', 'código', 'code', 'nombre', 'descripcion', 'descripción'}
+    MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+    HEADER_TOKENS = {
+        'codigo', 'código', 'code', 'nombre', 'descripcion',
+        'descripción', 'nit', 'regimen', 'régimen',
+    }
+
+    FIELD_ALIASES = {
+        'codigo': ('codigo', 'código', 'code', 'cod', 'ent_id'),
+        'nombre': ('nombre', 'name', 'entidad', 'razon_social'),
+        'descripcion': ('descripcion', 'descripción', 'nombre', 'description'),
+        'nit': ('nit', 'extra_v:poblacion', 'extra_i', 'identificacion', 'documento'),
+        'regimen': ('regimen', 'régimen', 'extra_ix', 'tipo_regimen'),
+    }
+
+    POSITIONAL_FALLBACK = {
+        'codigo': 0,
+        'nombre': 1,
+        'descripcion': 1,
+        'nit': 2,
+        'regimen': 3,
+    }
 
     @classmethod
     def process_upload(cls, upload_type: str, uploaded_file) -> dict:
         if not uploaded_file:
             raise ValueError('No se proporcionó ningún archivo para importar.')
+
+        file_size = getattr(uploaded_file, 'size', 0) or 0
+        if file_size > cls.MAX_UPLOAD_SIZE_BYTES:
+            raise ValueError('El archivo supera el límite máximo permitido de 25 MB.')
 
         filename = uploaded_file.name or ''
         if not filename.lower().endswith(cls.ALLOWED_EXTENSIONS):
@@ -76,29 +101,86 @@ class CatalogImporterService:
         )
 
     @classmethod
+    def _detect_csv_delimiter(cls, sample_line: str) -> str:
+        for candidate in (';', ',', '\t', '|'):
+            if candidate in sample_line:
+                return candidate
+        return ';'
+
+    @classmethod
+    def _resolve_csv_column_indices(cls, header_row: list, columns_map: dict) -> dict:
+        normalized_headers = {
+            col.strip().lower(): idx for idx, col in enumerate(header_row) if col and col.strip()
+        }
+        resolved = {}
+        for model_field, col_spec in columns_map.items():
+            if isinstance(col_spec, int):
+                resolved[model_field] = col_spec
+                continue
+
+            spec_lower = str(col_spec).strip().lower()
+            if spec_lower in normalized_headers:
+                resolved[model_field] = normalized_headers[spec_lower]
+                continue
+
+            matched_idx = None
+            for alias in cls.FIELD_ALIASES.get(model_field, ()):
+                if alias in normalized_headers:
+                    matched_idx = normalized_headers[alias]
+                    break
+
+            if matched_idx is not None:
+                resolved[model_field] = matched_idx
+            else:
+                resolved[model_field] = cls.POSITIONAL_FALLBACK.get(model_field, 0)
+        return resolved
+
+    @classmethod
     def _extract_records(cls, uploaded_file, is_csv: bool, columns_map: dict) -> list:
         records = []
         if is_csv:
+            uploaded_file.seek(0)
             raw_bytes = uploaded_file.read()
             text_content = raw_bytes.decode('utf-8-sig', errors='replace')
-            reader = csv.reader(io.StringIO(text_content), delimiter=';')
+            lines = [line for line in text_content.splitlines() if line.strip()]
+            if not lines:
+                return records
+
+            delimiter = cls._detect_csv_delimiter(lines[0])
+            reader = csv.reader(io.StringIO(text_content), delimiter=delimiter)
+
+            resolved_indices = None
             for row_idx, row in enumerate(reader):
-                if not row:
+                if not row or not any(cell.strip() for cell in row):
                     continue
-                if row_idx == 0 and row[0].strip().lower() in cls.HEADER_TOKENS:
+                first_cell_lower = row[0].strip().lower()
+                is_header_row = (
+                    row_idx == 0
+                    and (
+                        first_cell_lower in cls.HEADER_TOKENS
+                        or any(c.strip().lower() in cls.HEADER_TOKENS for c in row[:4])
+                    )
+                )
+                if is_header_row:
+                    resolved_indices = cls._resolve_csv_column_indices(row, columns_map)
                     continue
+
+                if resolved_indices is None:
+                    resolved_indices = {
+                        field: (spec if isinstance(spec, int) else cls.POSITIONAL_FALLBACK.get(field, idx))
+                        for idx, (field, spec) in enumerate(columns_map.items())
+                    }
+
                 item = {}
-                for model_field, col_spec in columns_map.items():
-                    if isinstance(col_spec, int):
-                        item[model_field] = row[col_spec].strip() if col_spec < len(row) else ''
-                    else:
-                        item[model_field] = ''
+                for model_field, col_idx in resolved_indices.items():
+                    item[model_field] = row[col_idx].strip() if 0 <= col_idx < len(row) else ''
                 records.append(item)
             return records
 
         # Lazy import de pandas solo para archivos Excel (.xlsx)
         import pandas as pd
 
+        uploaded_file.seek(0)
         df = pd.read_excel(uploaded_file, dtype=str)
         df.fillna('', inplace=True)
 
@@ -155,6 +237,12 @@ class CatalogImporterService:
                 obj_data['version_fecha'] = current_date
 
             batch.append(model(**obj_data))
+
+        if not batch:
+            raise ValueError(
+                f"El archivo no contiene registros válidos para '{upload_type}'. "
+                "Operación abortada para proteger la integridad del catálogo actual."
+            )
 
         with transaction.atomic():
             if model == Eps:

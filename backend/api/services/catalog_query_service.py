@@ -1,10 +1,9 @@
 """
 Servicio de Aplicación para consultas públicas y paginadas de catálogos SISPRO.
-Separa la lógica de paginación, filtrado y serialización de la capa HTTP.
+Separa la lógica de negocio y serialización de la capa HTTP y delega el acceso a datos a CatalogRepository.
 """
 
 from typing import Any, Dict, List
-from django.core.paginator import Paginator
 from ..repositories import CatalogRepository
 from ..serializers import (
     EpsLegacySerializer,
@@ -41,19 +40,18 @@ class CatalogQueryService:
 
     @classmethod
     def _paginate(cls, queryset, serializer_class, page_number: Any = 1, per_page: int = DEFAULT_PER_PAGE) -> Dict[str, Any]:
-        paginator = Paginator(queryset, per_page)
-        page_obj = paginator.get_page(page_number)
-        serializer = serializer_class(page_obj.object_list, many=True)
+        page_data = CatalogRepository.paginate_queryset(queryset, page_number=page_number, per_page=per_page)
+        serializer = serializer_class(page_data['items'], many=True)
 
         return {
             'results': serializer.data,
-            'total': paginator.count,
-            'page': page_obj.number,
-            'num_pages': paginator.num_pages,
-            'has_previous': page_obj.has_previous(),
-            'has_next': page_obj.has_next(),
-            'previous_page': page_obj.previous_page_number() if page_obj.has_previous() else None,
-            'next_page': page_obj.next_page_number() if page_obj.has_next() else None,
+            'total': page_data['total'],
+            'page': page_data['page'],
+            'num_pages': page_data['num_pages'],
+            'has_previous': page_data['has_previous'],
+            'has_next': page_data['has_next'],
+            'previous_page': page_data['previous_page'],
+            'next_page': page_data['next_page'],
         }
 
     @classmethod

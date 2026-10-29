@@ -11,8 +11,11 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-default-key-for-dev')
 
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-_env_hosts = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '*').split(',') if h.strip()]
-ALLOWED_HOSTS = list(set(_env_hosts + ['localhost', '127.0.0.1', 'backend', 'api_sm_django', '*']))
+_raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS', '').strip()
+if _raw_allowed_hosts:
+    ALLOWED_HOSTS = [h.strip() for h in _raw_allowed_hosts.split(',') if h.strip()]
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'backend', 'api_sm_django', 'testserver']
 
 
 # Application definition
@@ -97,8 +100,18 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
+_cors_origins = [
+    o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()
+]
+if _cors_origins:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = _cors_origins
+    CORS_ALLOW_CREDENTIALS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = False
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024  # 25 MB
 
 
 # Password validation

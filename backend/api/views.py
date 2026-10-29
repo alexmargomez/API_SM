@@ -182,6 +182,11 @@ def inspect_fhir_bundle(request):
 
     uploaded_file = request.FILES.get('file')
     if uploaded_file is not None:
+        if getattr(uploaded_file, 'size', 0) > 15 * 1024 * 1024:
+            return Response(
+                {'error': 'El archivo FHIR supera el límite máximo permitido de 15 MB.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             raw_input = uploaded_file.read().decode('utf-8-sig', errors='replace')
         except Exception as exc:

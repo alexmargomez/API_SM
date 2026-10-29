@@ -131,6 +131,24 @@ class ApiSmArchitectureAndDomainTests(TestCase):
         self.assertEqual(import_res.status_code, 200)
         self.assertEqual(Cups.objects.count(), 2)
 
+        # Importar CSV de Entidades (EPS) con encabezados por nombre y coma (verifica que NO borra EPS en blanco)
+        eps_csv = (
+            b"Codigo,Nombre,NIT,Regimen\n"
+            b"EPS005,SANITAS EPS,800251440,CONTRIBUTIVO\n"
+            b"EPS010,SURA EPS,800088702,CONTRIBUTIVO\n"
+            b"ESS091,ASMET SALUD,817000248,SUBSIDIADO\n"
+        )
+        uploaded_eps = SimpleUploadedFile('entidades_update.csv', eps_csv, content_type='text/csv')
+        eps_res = self.client.post('/api/panel/import/', {'type': 'entidades', 'file': uploaded_eps}, format='multipart')
+        self.assertEqual(eps_res.status_code, 200)
+        self.assertEqual(Eps.objects.count(), 3)
+
+        # Guardrail Zero-Wipe: subir un CSV vacío o sin registros válidos aborta con 400 y preserva las 3 EPS intactas
+        empty_csv = SimpleUploadedFile('empty.csv', b"Codigo;Nombre;NIT;Regimen\n;;;\n", content_type='text/csv')
+        wipe_res = self.client.post('/api/panel/import/', {'type': 'entidades', 'file': empty_csv}, format='multipart')
+        self.assertEqual(wipe_res.status_code, 400)
+        self.assertEqual(Eps.objects.count(), 3)
+
     def test_fhir_res_1888_bundle_inspector_sample_and_validation(self):
         # 1. GET devuelve el Bundle de ejemplo Res. 1888 inspeccionado
         res_get = self.client.get('/api/tools/fhir-inspector/')
