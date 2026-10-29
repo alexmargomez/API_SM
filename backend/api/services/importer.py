@@ -20,8 +20,10 @@ class CatalogImporterService:
     ALLOWED_EXTENSIONS = ('.xlsx', '.csv')
     MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
     HEADER_TOKENS = {
-        'codigo', 'código', 'code', 'nombre', 'descripcion',
-        'descripción', 'nit', 'regimen', 'régimen',
+        'codigo', 'código', 'code', 'cod', 'ent_id', 'nombre', 'name',
+        'entidad', 'razon_social', 'descripcion', 'descripción', 'description',
+        'nit', 'extra_v:poblacion', 'extra_i', 'identificacion', 'documento',
+        'regimen', 'régimen', 'extra_ix', 'tipo_regimen',
     }
 
     FIELD_ALIASES = {

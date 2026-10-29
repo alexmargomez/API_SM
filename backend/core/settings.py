@@ -11,9 +11,10 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-default-key-for-dev')
 
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
+_INTERNAL_HOSTS = ['localhost', '127.0.0.1', 'backend', 'api_sm_django', 'testserver']
 _raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS', '').strip()
 if _raw_allowed_hosts:
-    ALLOWED_HOSTS = [h.strip() for h in _raw_allowed_hosts.split(',') if h.strip()]
+    ALLOWED_HOSTS = list(dict.fromkeys([h.strip() for h in _raw_allowed_hosts.split(',') if h.strip()] + _INTERNAL_HOSTS))
 else:
     ALLOWED_HOSTS = ['*']
 
