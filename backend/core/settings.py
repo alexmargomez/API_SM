@@ -15,7 +15,7 @@ _raw_allowed_hosts = os.environ.get('ALLOWED_HOSTS', '').strip()
 if _raw_allowed_hosts:
     ALLOWED_HOSTS = [h.strip() for h in _raw_allowed_hosts.split(',') if h.strip()]
 else:
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'backend', 'api_sm_django', 'testserver']
+    ALLOWED_HOSTS = ['*']
 
 
 # Application definition

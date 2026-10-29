@@ -263,6 +263,9 @@ class CatalogImporterService:
 
             model.objects.bulk_create(batch, batch_size=1000)
 
+        from api.repositories import CatalogRepository
+        CatalogRepository.invalidate_cache()
+
         updated_count = len(batch)
         return {
             'updated_count': updated_count,
