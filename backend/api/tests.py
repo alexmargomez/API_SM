@@ -161,16 +161,18 @@ class ApiSmArchitectureAndDomainTests(TestCase):
         self.assertEqual(Eps.objects.first().codigo, 'EPS037')
 
     def test_fhir_res_1888_bundle_inspector_sample_and_validation(self):
-        # 1. GET devuelve el Bundle de ejemplo Res. 1888 inspeccionado
+        # 1. GET devuelve el Bundle de ejemplo Res. 1888 inspeccionado con 0 datos obligatorios faltantes
         res_get = self.client.get('/api/tools/fhir-inspector/')
         self.assertEqual(res_get.status_code, 200)
         self.assertIn('summary', res_get.data)
         self.assertIn('modules', res_get.data)
-        self.assertIn('catalog_validations', res_get.data)
+        self.assertIn('mandatory_validations', res_get.data)
+        self.assertEqual(res_get.data['summary']['mandatory_failed_count'], 0)
+        self.assertGreater(res_get.data['summary']['mandatory_passed_count'], 20)
         module_ids = {m['id'] for m in res_get.data['modules']}
         self.assertTrue({'encabezado', 'paciente', 'atencion', 'diagnosticos', 'medicamentos', 'alergias_familiares_otros'}.issubset(module_ids))
 
-        # 2. POST con un recurso individual que no es Bundle genera advertencia estructural en structural_warnings
+        # 2. POST con un recurso incompleto detecta todos los campos obligatorios no construidos en el FHIR
         res_single = self.client.post(
             '/api/tools/fhir-inspector/',
             {'raw_json': '{"resourceType": "Patient", "id": "123"}'},
@@ -178,6 +180,7 @@ class ApiSmArchitectureAndDomainTests(TestCase):
         )
         self.assertEqual(res_single.status_code, 200)
         self.assertGreater(len(res_single.data['structural_warnings']), 0)
+        self.assertGreater(res_single.data['summary']['mandatory_failed_count'], 0)
 
         # 3. POST con JSON corrupto retorna 400 Bad Request
         res_bad = self.client.post(

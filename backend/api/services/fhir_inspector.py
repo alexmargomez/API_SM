@@ -20,6 +20,7 @@ from .fhir_primitives import (
     _find_extension,
     _safe_str,
 )
+from .fhir_structure_validator import validate_mandatory_fhir_structure
 
 
 class FhirBundleInspectorService:
@@ -211,10 +212,29 @@ class FhirBundleInspectorService:
 
         resource_counts = {rtype: len(rlist) for rtype, rlist in resources_by_type.items()}
 
-        # 7. Construir resumen global en texto plano listo para copiar
+        # 7. Validar todos los apartados y datos de estructura obligatorios de la Resolución 1888
+        structure_report = validate_mandatory_fhir_structure(
+            bundle=bundle,
+            composition=composition,
+            resources_by_type=resources_by_type,
+            resource_index=resource_index,
+            rda_type_label=mod_encabezado.get('rda_type_label', 'Bundle FHIR'),
+        )
+        for alert_msg in structure_report['alerts']:
+            if alert_msg not in structural_warnings:
+                structural_warnings.append(alert_msg)
+
+        module_alerts_map = structure_report.get('module_missing_alerts', {})
+        for mod in modules:
+            m_alerts = module_alerts_map.get(mod['id'], [])
+            mod['missing_alerts'] = m_alerts
+            mod['has_missing_apartados'] = len(m_alerts) > 0
+
+        # 8. Construir resumen global en texto plano listo para copiar
         plain_text_report = cls._build_plain_text_report(
             mod_encabezado,
             modules,
+            structure_report['checks'],
             catalog_validation_items,
             structural_warnings,
         )
@@ -225,13 +245,22 @@ class FhirBundleInspectorService:
                 'rda_date': mod_encabezado.get('rda_date', 'No especificada'),
                 'total_resources': sum(resource_counts.values()),
                 'resource_counts': resource_counts,
+                'total_mandatory_checks': structure_report['total_mandatory_checks'],
+                'mandatory_passed_count': structure_report['passed_count'],
+                'mandatory_failed_count': structure_report['failed_count'],
+                'empty_sections_count': structure_report['empty_sections_count'],
                 'total_codes_checked': len(catalog_validation_items),
                 'valid_codes_count': valid_codes_count,
                 'invalid_codes_count': invalid_codes_count,
                 'structural_warnings_count': len(structural_warnings),
-                'is_fully_valid': invalid_codes_count == 0 and len(structural_warnings) == 0,
+                'is_fully_valid': (
+                    structure_report['failed_count'] == 0
+                    and invalid_codes_count == 0
+                    and len(structural_warnings) == 0
+                ),
             },
             'structural_warnings': structural_warnings,
+            'mandatory_validations': structure_report['checks'],
             'catalog_validations': catalog_validation_items,
             'modules': modules,
             'plain_text_report': plain_text_report,
@@ -690,6 +719,8 @@ class FhirBundleInspectorService:
                 fields.append({'label': 'Código de Habilitación REPS', 'value': reps_val or 'No registrado'})
             else:
                 fields.append({'label': 'Código de Aseguradora (EAPB)', 'value': eapb_val or 'No registrado'})
+                if catalog_check:
+                    fields.append({'label': 'Validación en Base de Datos (API_SM)', 'value': catalog_check['official_name']})
 
             items.append({
                 'title': org_name,
@@ -987,8 +1018,12 @@ class FhirBundleInspectorService:
             items.append({
                 'title': f"{cie_code} — {sent_display}" if cie_code else (sent_display or f"Condición #{idx + 1}"),
                 'subtitle': f"{diag_role} • Estado de la condición: {verif_status}",
-                'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else ('CIE-10 No Encontrado' if catalog_check else verif_status),
-                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else ('danger' if catalog_check else 'secondary'),
+                'badge': (
+                    (f"CIE-10: {cie_code} (Válido en BD)" if catalog_check['valid'] else f"CIE-10: {cie_code} (No en BD)")
+                    if catalog_check
+                    else 'Sin Código CIE-10 en FHIR'
+                ),
+                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else 'danger',
                 'explanation': explanation,
                 'catalog_check': catalog_check,
                 'fields': [
@@ -997,7 +1032,10 @@ class FhirBundleInspectorService:
                     {'label': 'Estado clínico', 'value': clin_status},
                     {'label': 'Diagnóstico (CIE-10)', 'value': diag_formatted},
                     {'label': 'Descripción de la condición / Notas', 'value': cond_description or 'Sin descripción adicional en el JSON'},
-                    {'label': 'Nombre Oficial en Base de Datos (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'Sin código para validar'},
+                    {
+                        'label': 'Validación en Base de Datos (API_SM)',
+                        'value': catalog_check['official_name'] if catalog_check else 'No validado',
+                    },
                 ],
                 'raw_resource': cond,
             })
@@ -1280,15 +1318,22 @@ class FhirBundleInspectorService:
             items.append({
                 'title': f"📋 Orden / Solicitud: {cups_code} — {sent_name}",
                 'subtitle': 'Solicitud / Orden de Procedimiento o Apoyo Diagnóstico (ServiceRequest)',
-                'badge': 'CUPS Válido' if (catalog_check and catalog_check['valid']) else ('CUPS No Encontrado' if catalog_check else 'Solicitud'),
-                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else ('danger' if catalog_check else 'info'),
+                'badge': (
+                    (f"CUPS: {cups_code} (Válido en BD)" if catalog_check['valid'] else f"CUPS: {cups_code} (No en BD)")
+                    if catalog_check
+                    else 'Sin Código CUPS en FHIR'
+                ),
+                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else 'danger',
                 'explanation': explanation,
                 'catalog_check': catalog_check,
                 'fields': [
                     {'label': 'Tipo de Registro', 'value': 'Solicitud / Orden Médica (ServiceRequest)'},
-                    {'label': 'Código CUPS Enviado', 'value': cups_code or 'No enviado'},
-                    {'label': 'Descripción Enviada en el JSON', 'value': sent_name or 'No enviada'},
-                    {'label': 'Descripción Oficial en Base de Datos (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'Sin código para validar'},
+                    {'label': 'Código CUPS Construido', 'value': cups_code or 'No construido en el JSON'},
+                    {'label': 'Descripción en el JSON', 'value': sent_name or 'No enviada'},
+                    {
+                        'label': 'Validación en Base de Datos (API_SM)',
+                        'value': catalog_check['official_name'] if catalog_check else 'No validado',
+                    },
                     {'label': 'Fecha de la Solicitud', 'value': authored_on or 'No registrada'},
                     {'label': 'Indicaciones / Notas', 'value': notes or 'Sin notas'},
                 ],
@@ -1327,15 +1372,22 @@ class FhirBundleInspectorService:
             items.append({
                 'title': f"⚡ Procedimiento Realizado: {cups_code} — {sent_name}",
                 'subtitle': 'Procedimiento Ejecutado Durante la Atención (Procedure)',
-                'badge': 'CUPS Válido' if (catalog_check and catalog_check['valid']) else ('CUPS No Encontrado' if catalog_check else 'Ejecutado'),
-                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else ('danger' if catalog_check else 'primary'),
+                'badge': (
+                    (f"CUPS: {cups_code} (Válido en BD)" if catalog_check['valid'] else f"CUPS: {cups_code} (No en BD)")
+                    if catalog_check
+                    else 'Sin Código CUPS en FHIR'
+                ),
+                'badge_type': 'success' if (catalog_check and catalog_check['valid']) else 'danger',
                 'explanation': explanation,
                 'catalog_check': catalog_check,
                 'fields': [
                     {'label': 'Tipo de Registro', 'value': 'Procedimiento Realizado (Procedure)'},
-                    {'label': 'Código CUPS Enviado', 'value': cups_code or 'No enviado'},
-                    {'label': 'Descripción Enviada en el JSON', 'value': sent_name or 'No enviada'},
-                    {'label': 'Descripción Oficial en Base de Datos (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'Sin código para validar'},
+                    {'label': 'Código CUPS Construido', 'value': cups_code or 'No construido en el JSON'},
+                    {'label': 'Descripción en el JSON', 'value': sent_name or 'No enviada'},
+                    {
+                        'label': 'Validación en Base de Datos (API_SM)',
+                        'value': catalog_check['official_name'] if catalog_check else 'No validado',
+                    },
                     {'label': 'Fecha de Ejecución', 'value': perf_date or 'No registrada'},
                     {'label': 'Resultado / Notas del Procedimiento', 'value': outcome_text or notes or 'Sin notas'},
                 ],
@@ -1472,8 +1524,8 @@ class FhirBundleInspectorService:
                 items.append({
                     'title': f"👪 Antecedente Familiar ({parentesco_label}): {diag_label}",
                     'subtitle': f"Estado del antecedente familiar: {fam_status}" + (f" • Descripción: {descripcion_familiar}" if descripcion_familiar else ""),
-                    'badge': 'CIE-10 Válido' if (catalog_check and catalog_check['valid']) else f"Estado: {fam_status}",
-                    'badge_type': 'success' if (catalog_check and catalog_check['valid']) else 'info',
+                    'badge': f"CIE-10: {cie_code}" if cie_code else f"Estado: {fam_status}",
+                    'badge_type': 'success' if cie_code else 'danger',
                     'explanation': explanation,
                     'catalog_check': catalog_check,
                     'fields': [
@@ -1481,7 +1533,6 @@ class FhirBundleInspectorService:
                         {'label': 'Parentesco', 'value': parentesco_label},
                         {'label': 'Diagnóstico (CIE-10)', 'value': diag_label},
                         {'label': 'Descripción', 'value': descripcion_familiar or 'Sin descripción adicional'},
-                        {'label': 'Nombre Oficial en BD (API_SM)', 'value': catalog_check['official_name'] if catalog_check else 'N/A'},
                     ],
                     'raw_resource': fam,
                 })
@@ -1589,12 +1640,13 @@ class FhirBundleInspectorService:
         cls,
         header_mod: Dict[str, Any],
         modules: List[Dict[str, Any]],
+        mandatory_validations: List[Dict[str, Any]],
         catalog_validations: List[Dict[str, Any]],
         structural_warnings: List[str],
     ) -> str:
         lines = [
             "======================================================================",
-            " REPORTE DE INSPECCIÓN Y TRADUCCIÓN FHIR (RESOLUCIÓN 1888 / IHCE)",
+            " REPORTE DE INSPECCIÓN Y VALIDACIÓN FHIR (RESOLUCIÓN 1888 / IHCE)",
             " Generado por API_SM",
             "======================================================================",
             f"Tipo de Documento : {header_mod.get('rda_type_label')}",
@@ -1603,23 +1655,34 @@ class FhirBundleInspectorService:
         ]
 
         if structural_warnings:
-            lines.append("⚠️ ALERTAS DE ESTRUCTURA FHIR:")
+            lines.append("🚨 ALERTAS DE APARTADOS OBLIGATORIOS FALTANTES Y ESTRUCTURA:")
             for w in structural_warnings:
                 lines.append(f"  - {w}")
             lines.append("")
 
-        if catalog_validations:
-            lines.append("🔍 VALIDACIÓN CONTRA CATÁLOGOS OFICIALES (SISPRO - API_SM):")
-            for cv in catalog_validations:
-                icon = "✅ VÁLIDO" if cv['valid'] else "❌ NO ENCONTRADO"
+        if mandatory_validations:
+            lines.append("🔍 VERIFICACIÓN DE APARTADOS Y ESTRUCTURA OBLIGATORIA (RES. 1888 / IHCE):")
+            for mv in mandatory_validations:
+                icon = "✅ PRESENTE" if mv['status'] == 'ok' else ("⚠️ SECCIÓN VACÍA" if mv['status'] == 'empty_section' else "🚨 FALTA APARTADO / DATO OBLIGATORIO")
                 lines.append(
-                    f"  - [{cv['catalog']}] Código {cv['code']}: {icon} | Enviado: '{cv['sent_name']}' -> Oficial BD: '{cv['official_name']}'"
+                    f"  - [{mv['module']} | {mv['resource']}] {mv['field']}: {icon} -> {mv['value']}"
+                )
+            lines.append("")
+
+        if catalog_validations:
+            lines.append("🗄️ VALIDACIÓN DE CÓDIGOS CONSTRUIDOS CONTRA BASE DE DATOS (API_SM):")
+            for cv in catalog_validations:
+                status_icon = "✅ VÁLIDO EN BD" if cv['valid'] else "❌ NO EXISTE EN BD"
+                lines.append(
+                    f"  - [{cv['catalog']}] Código '{cv['code']}' ({cv['sent_name']}): {status_icon} -> {cv['official_name']}"
                 )
             lines.append("")
 
         lines.append("📋 DESGLOSE EN LENGUAJE CLARO POR MÓDULOS:")
         for mod in modules:
             lines.append(f"\n--- {mod['title']} ({mod['count']} registro(s)) ---")
+            for m_alert in mod.get('missing_alerts') or []:
+                lines.append(f"  {m_alert}")
             lines.append(mod['narrative'].replace('**', '').replace('*', ''))
 
         return "\n".join(lines)
@@ -1735,6 +1798,10 @@ class FhirBundleInspectorService:
                             {
                                 'url': 'https://fhir.minsalud.gov.co/rda/StructureDefinition/ExtensionBiologicalSex',
                                 'valueCoding': {'code': '01', 'display': '01 - Hombre'},
+                            },
+                            {
+                                'url': 'https://fhir.minsalud.gov.co/rda/StructureDefinition/ExtensionNationality',
+                                'valueCoding': {'code': '170', 'display': '170 - Colombia'},
                             },
                             {
                                 'url': 'https://fhir.minsalud.gov.co/rda/StructureDefinition/ExtensionOccupation',
@@ -1982,6 +2049,7 @@ class FhirBundleInspectorService:
                         'resourceType': 'AllergyIntolerance',
                         'id': 'AllergyIntolerance-0',
                         'clinicalStatus': {'coding': [{'code': 'active', 'display': 'Activa'}]},
+                        'verificationStatus': {'coding': [{'code': 'confirmed', 'display': 'Confirmado'}]},
                         'category': ['medication'],
                         'code': {'coding': [{'code': 'PENICILINA', 'display': 'Alergia a Penicilina y derivados betalactámicos'}]},
                         'patient': {'reference': '#Patient-0'},
